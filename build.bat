@@ -1,17 +1,2 @@
-# Router validation
-
-`router_test.mjs` checks the pure-JS node router (`patches/noderouter.js`) against
-the real game map: every terminal pair must be connected using only activated
-nodes, the reported CP must equal the sum over the returned set, and sharing must
-beat naive per-pair routing.
-
-Run it after `python build.py` (which fetches the map data):
-
-```
-cd tests
-cp ../patches/noderouter.js .
-cp ../server/static/data/nodes_links.json ../server/static/data/exploration.json ../server/static/data/plantzone.json .
-node router_test.mjs
-```
-
-Expected: every row reports `connected-OK` and ends with `ALL CHECKS PASS`.
+@echo off
+python "%~dp0build.py" %*

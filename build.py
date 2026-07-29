@@ -1,88 +1,101 @@
-import init, { WasmNodeRouter } from './noderouter.js'
-import fs from 'fs'
+#!/usr/bin/env python3
+"""
+Cross-platform setup for the fused app (Windows / macOS / Linux).
 
-const nodesLinks = JSON.parse(fs.readFileSync('./nodes_links.json'))
-const expl = JSON.parse(fs.readFileSync('./exploration.json'))
-const pzs = JSON.parse(fs.readFileSync('./plantzone.json'))
+  python build.py            # set up backend, then try to build the map UI
+  python build.py --backend  # backend only (skip the frontend build)
 
-await init()
-const router = new WasmNodeRouter(nodesLinks)
-console.log('graph: nodes=', router.n, 'towns=', router.townIndices.length)
+The backend is set up FIRST and independently, so `run` works even if the
+frontend build can't complete.
+"""
+import os
+import subprocess
+import sys
+import shutil
+import venv
+from pathlib import Path
 
-// build adjacency for INDEPENDENT verification (not using router internals)
-const adj = new Map(), cp = new Map(), town = new Set()
-for (const [k,v] of Object.entries(nodesLinks)) {
-  const key = Number(k)
-  cp.set(key, Number(v.need_exploration_point)||0)
-  if (v.is_base_town) town.add(key)
-  if (!adj.has(key)) adj.set(key, new Set())
-  for (const l of v.link_list||[]) {
-    const j = Number(l)
-    if (!nodesLinks[j]) continue
-    adj.get(key).add(j)
-    if (!adj.has(j)) adj.set(j, new Set())
-    adj.get(j).add(key)
-  }
-}
+ROOT = Path(__file__).resolve().parent
+WM = ROOT / "workermanjs"
+SERVER = ROOT / "server"
+IS_WIN = os.name == "nt"
 
-function verify(active, pairs) {
-  const S = new Set(active)
-  // components within S
-  const comp = new Map(); let id=0; const townComp=new Set()
-  for (const s of S) {
-    if (comp.has(s)) continue
-    const cid = id++; const st=[s]; comp.set(s,cid)
-    while (st.length) {
-      const u = st.pop()
-      if (town.has(u)) townComp.add(cid)
-      for (const v of (adj.get(u)||[])) if (S.has(v) && !comp.has(v)) { comp.set(v,cid); st.push(v) }
-    }
-  }
-  for (const [src,dst] of pairs) {
-    if (!S.has(src)) return `source ${src} not activated`
-    if (dst === 99999) { if (!townComp.has(comp.get(src))) return `src ${src} not connected to any town` }
-    else { if (!S.has(dst)) return `dst ${dst} not activated`
-           if (comp.get(src)!==comp.get(dst)) return `pair ${src}->${dst} disconnected` }
-  }
-  return null
-}
-const costOf = (active) => active.reduce((s,k)=>s+(cp.get(k)||0),0)
 
-// realistic pairs: plantzones -> towns, plus wildcard grind nodes
-const pzKeys = Object.keys(pzs).map(Number).filter(k=>nodesLinks[k])
-const townKeys = [...town]
-function makePairs(nWorkers, nGrind, seed=1) {
-  let s=seed; const rnd=()=>{s=(s*1103515245+12345)&0x7fffffff; return s/0x7fffffff}
-  const pairs=[]; const used=new Set()
-  for (let i=0;i<nWorkers;i++){
-    const pz = pzKeys[Math.floor(rnd()*pzKeys.length)]
-    if (used.has(pz)) continue; used.add(pz)
-    pairs.push([pz, townKeys[Math.floor(rnd()*townKeys.length)]])
-  }
-  for (let i=0;i<nGrind;i++){
-    const g = pzKeys[Math.floor(rnd()*pzKeys.length)]
-    if (used.has(g)) continue; used.add(g)
-    pairs.push([g, 99999])
-  }
-  return pairs
-}
+def sh(cmd, cwd=None, shell=False):
+    print(f"  $ {cmd if isinstance(cmd, str) else ' '.join(map(str, cmd))}")
+    subprocess.run(cmd, cwd=cwd, shell=shell, check=True)
 
-let allOk = true
-for (const [nw,ng] of [[5,0],[25,3],[60,8],[120,15],[200,25]]) {
-  const pairs = makePairs(nw,ng)
-  const t0=performance.now()
-  const [active, cost] = router.solveForTerminalPairs(pairs)
-  const ms=performance.now()-t0
-  const err = verify(active, pairs)
-  const recomputed = costOf(active)
-  // naive baseline: route each pair independently, union (no sharing)
-  const solo = new WasmNodeRouter(nodesLinks)
-  let union=new Set()
-  for (const p of pairs){ const [a]=solo.solveForTerminalPairs([p]); a.forEach(x=>union.add(x)) }
-  const naive = costOf([...union])
-  const status = err ? `FAIL(${err})` : 'connected-OK'
-  if (err) allOk=false
-  if (recomputed !== cost) { allOk=false; console.log('  COST MISMATCH', cost, recomputed) }
-  console.log(`pairs=${String(pairs.length).padStart(3)} | CP=${String(cost).padStart(4)} | naive=${String(naive).padStart(4)} | saved=${String(naive-cost).padStart(3)} (${((1-cost/naive)*100).toFixed(1)}%) | ${ms.toFixed(0)}ms | ${status}`)
-}
-console.log(allOk ? '\nALL CHECKS PASS' : '\nFAILURES PRESENT')
+
+def venv_python(env_dir: Path) -> Path:
+    return env_dir / ("Scripts" if IS_WIN else "bin") / ("python.exe" if IS_WIN else "python")
+
+
+def setup_backend():
+    print(">> backend: creating venv + installing")
+    env_dir = SERVER / ".venv"
+    if not venv_python(env_dir).exists():
+        venv.create(env_dir, with_pip=True)
+    py = venv_python(env_dir)
+    sh([str(py), "-m", "pip", "install", "--upgrade", "pip"])
+    sh([str(py), "-m", "pip", "install", "-r", str(SERVER / "requirements.txt")])
+    print(">> backend ready.")
+
+
+def setup_data():
+    """Fetch just Workerman's data/ so /api/prices + /api/effective-prices work
+    (and the fallback page is usable) even without building the map UI."""
+    print(">> data: fetching Workerman game data")
+    if not WM.exists():
+        sh(["git", "clone", "--depth", "1", "https://github.com/shrddr/workermanjs.git", str(WM)])
+    static_data = SERVER / "static" / "data"
+    if not static_data.exists():
+        shutil.copytree(WM / "data", static_data)
+    print(">> data ready.")
+
+
+def setup_frontend():
+    print(">> frontend: clone + patch + build")
+    if not WM.exists():
+        sh(["git", "clone", "--depth", "1", "https://github.com/shrddr/workermanjs.git", str(WM)])
+    sh([sys.executable, str(ROOT / "patches" / "apply_patches.py"), str(WM)])
+
+    # apply_patches installs a pure-JS node router here when none exists, so the
+    # map builds without any WASM toolchain. This is just a safety net.
+    pkg = WM / "src" / "pkg" / "noderouter.js"
+    if not pkg.exists():
+        print(
+            "\n  !! src/pkg/noderouter.js is missing, so the map cannot build.\n"
+            "     patches/noderouter.js should have been installed there.\n"
+            "     Skipping the map build; the backend + optimizer API still work.\n"
+        )
+        return False
+
+    npm = "npm.cmd" if IS_WIN else "npm"
+    sh([npm, "install", "--no-audit", "--no-fund"], cwd=WM)
+    sh([npm, "run", "build"], cwd=WM)
+    # game data the app fetches at runtime
+    dist = WM / "dist"
+    shutil.copytree(WM / "data", dist / "data", dirs_exist_ok=True)
+    # publish into the server
+    static = SERVER / "static"
+    if static.exists():
+        shutil.rmtree(static)
+    shutil.copytree(dist, static)
+    print(">> frontend built and published to server/static.")
+    return True
+
+
+def main():
+    backend_only = "--backend" in sys.argv
+    setup_backend()
+    setup_data()
+    if not backend_only:
+        try:
+            setup_frontend()
+        except subprocess.CalledProcessError as e:
+            print(f"\n  !! frontend build step failed ({e}). Backend is still runnable.\n")
+    print("\nDone. Start it with:  " + ("run.bat" if IS_WIN else "./run.sh"))
+
+
+if __name__ == "__main__":
+    main()

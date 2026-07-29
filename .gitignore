@@ -1,0 +1,25 @@
+# Upstream source, cloned by build.py at build time. Deliberately NOT vendored:
+# workermanjs has no LICENSE file, so it is not ours to redistribute.
+workermanjs/
+
+# Build output and environments
+server/static/
+server/.venv/
+.venv/
+dist/
+node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Local config and secrets
+.env
+*.local
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
