@@ -1,6 +1,7 @@
 <script>
 import { useUserStore } from '../stores/user'
 import { useMarketStore } from '../stores/market'
+import { useOptimizeJobStore } from '../stores/optimizeJob'
 
 const DEFAULT_SOLVER = {
   mip_rel_gap: 0.0001,
@@ -9,12 +10,28 @@ const DEFAULT_SOLVER = {
   root_heuristic: true,
 }
 
+// Prices are considered fresh for this long before optimize() or "Reload
+// prices" bothers re-fetching - matches the backend's own BDOLYTICS_CACHE_TTL
+// (server/app.py) exactly, so the client never asks more often than the
+// source could actually have changed.
+const PRICE_FRESH_MS = 10 * 60 * 1000
+
 // The Optimize page. Same dashboard design as the standalone panel, but wired
 // directly to Workerman's Pinia stores so it uses the map's live prices and
 // loads the solved empire straight onto the map via userStore.migrate().
+//
+// Job state (id/status/log/poll) lives in useOptimizeJobStore rather than
+// this component's own data(), so a running solve survives navigating away
+// from this page - the store is an app-lifetime singleton, the poll interval
+// lives at module scope inside it, and neither is touched by this
+// component's mount/unmount.
 export default {
   setup() {
-    return { userStore: useUserStore(), marketStore: useMarketStore() }
+    return {
+      userStore: useUserStore(),
+      marketStore: useMarketStore(),
+      jobStore: useOptimizeJobStore(),
+    }
   },
   data() {
     return {
@@ -23,16 +40,13 @@ export default {
       budget: 500,
       extend: false,
       solver: { ...DEFAULT_SOLVER },
-      job: null,
-      log: [],
       priceLoading: false,
-      poll: null,
       priceStatus: null,
     }
   },
   computed: {
     solving() {
-      return this.job && ['running', 'starting', 'stopping'].includes(this.job.status)
+      return this.jobStore.solving
     },
     region: {
       get() { return this.userStore.selectedRegion },
@@ -62,15 +76,10 @@ export default {
       this.addLog('No backend detected. Start it with run and reload.')
     }
   },
-  beforeUnmount() {
-    clearInterval(this.poll)
-  },
   methods: {
     fmt(n) { return new Intl.NumberFormat('en-US').format(Math.round(n || 0)) },
     addLog(line) {
-      const t = new Date().toLocaleTimeString()
-      this.log.push(`${t}  ${line}`)
-      if (this.log.length > 140) this.log.shift()
+      this.jobStore.addLog(line)
       this.$nextTick(() => {
         const el = this.$refs.logbox
         if (el) el.scrollTop = el.scrollHeight
@@ -82,7 +91,12 @@ export default {
         this.priceStatus = await r.json()
       } catch { this.priceStatus = null }
     },
-    async reloadPrices() {
+    async reloadPrices(force = false) {
+      if (!force && this.marketStore.apiDatetime && (Date.now() - this.marketStore.apiDatetime) < PRICE_FRESH_MS) {
+        const ageS = Math.round((Date.now() - this.marketStore.apiDatetime) / 1000)
+        this.addLog(`Prices already fresh (${ageS}s old).`)
+        return
+      }
       this.priceLoading = true
       this.addLog(`Fetching ${this.region} prices...`)
       try {
@@ -129,8 +143,9 @@ export default {
       return { prices: out, dropped }
     },
     async optimize() {
-      this.log = []
+      this.jobStore.log = []
       this.addLog(`Optimize starting - budget ${this.budget} CP.`)
+      await this.reloadPrices()
       const { prices, dropped } = this.cleanPrices(this.marketStore.prices)
       if (dropped) {
         this.addLog(`${dropped} item(s) had no usable price and will be valued at 0.`)
@@ -145,71 +160,20 @@ export default {
         baseEmpire: this.baseEmpire(),
         solverOverrides: this.solverPayload(),
       }
-      try {
-        const r = await fetch('/api/optimize', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        })
-        if (!r.ok) throw new Error(`server ${r.status}`)
-        const d = await r.json()
-        this.job = { id: d.job_id, status: 'running' }
-        this.addLog(`Job ${d.job_id.slice(0, 8)} running. Large budgets can take a while.`)
-        this.startPolling(d.job_id)
-      } catch (e) {
-        this.addLog(`Failed to start: ${e.message}`)
-      }
-    },
-    startPolling(id) {
-      this.poll = setInterval(async () => {
-        try {
-          const r = await fetch(`/api/optimize/${id}`)
-          const d = await r.json()
-          this.job = { id, status: d.status }
-          if (d.status === 'done' || d.status === 'stopped') {
-            clearInterval(this.poll)
-            this.finish(d)
-          } else if (d.status === 'error') {
-            clearInterval(this.poll)
-            this.addLog('Solver error (see server console).')
-          }
-        } catch (e) {
-          clearInterval(this.poll)
-          this.job = { id, status: 'error' }
-          this.addLog(`Lost contact with server: ${e.message}`)
-        }
-      }, 2000)
-    },
-    finish(d) {
-      if (d.result) {
-        // userStore.migrate() is upstream Workerman code that expects a JSON
-        // *string* (it does JSON.parse(localStored) internally, matching how
-        // App.vue calls it with localStorage.getItem('user')). d.result here
-        // is already a parsed object from r.json(), so it must be
-        // re-stringified or JSON.parse coerces it to "[object Object]" and
-        // throws - which the polling try/catch then misreports as a lost
-        // connection even though the job finished successfully.
-        this.userStore.migrate(JSON.stringify(d.result))
-        this.addLog('Optimized empire loaded onto the map.')
-      } else {
-        this.addLog('Job finished but returned no empire.')
-      }
+      await this.jobStore.start(body)
     },
     async stop() {
-      if (!this.job) return
-      this.addLog('Stopping - keeps best solution so far.')
-      this.job = { ...this.job, status: 'stopping' }
-      await fetch(`/api/optimize/${this.job.id}/stop`, { method: 'POST' })
+      await this.jobStore.stop()
     },
     resetSolver() {
       this.solver = { ...DEFAULT_SOLVER }
     },
     jobLabel() {
-      if (!this.job) return 'Idle'
+      if (!this.jobStore.status) return 'Idle'
       return {
         running: 'Solving', starting: 'Starting', stopping: 'Stopping',
         done: 'Done', stopped: 'Stopped (best so far)', error: 'Error',
-      }[this.job.status] || this.job.status
+      }[this.jobStore.status] || this.jobStore.status
     },
   },
 }
@@ -267,7 +231,7 @@ export default {
             <button v-if="!solving" class="eo-btn primary" @click="optimize">Optimize</button>
             <button v-else class="eo-btn danger" @click="stop">Stop</button>
           </div>
-          <p class="eo-jobline" :class="job ? job.status : 'idle'">{{ jobLabel() }}</p>
+          <p class="eo-jobline" :class="jobStore.status || 'idle'">{{ jobLabel() }}</p>
         </section>
 
         <section class="eo-card">
@@ -276,7 +240,7 @@ export default {
             <span class="eo-dot" :class="marketStore.apiAlive ? 'ok' : 'wait'"></span>
             {{ priceCount ? fmt(priceCount) + ' items \u00b7 ' + region : 'Not loaded' }}
           </div>
-          <button class="eo-btn" @click="reloadPrices" :disabled="priceLoading">
+          <button class="eo-btn" @click="reloadPrices(true)" :disabled="priceLoading">
             {{ priceLoading ? 'Loading...' : 'Reload prices' }}
           </button>
           <p v-if="priceStatus" class="eo-note" :class="{ 'eo-warn': shortfall }">{{ priceStatus.source }}</p>
@@ -284,14 +248,14 @@ export default {
         {{ shortfall }} item(s) came back unpriced and are valued at 0 by the solver.
         Reload once the cache expires; transient rate limiting usually clears.
       </p>
-      <p class="eo-note">Reload before optimizing so the solve uses fresh market data.</p>
+      <p class="eo-note">Prices refresh automatically before each optimize if they're more than 10 minutes old.</p>
         </section>
 
         <section class="eo-card eo-span">
           <h2 class="eo-h2">Activity</h2>
           <div class="eo-log" ref="logbox">
-            <div v-if="log.length === 0" class="eo-log-empty">No activity yet. Reload prices, set a budget, then Optimize.</div>
-            <div v-for="(l, i) in log" :key="i" class="eo-log-line">{{ l }}</div>
+            <div v-if="jobStore.log.length === 0" class="eo-log-empty">No activity yet. Set a budget, then Optimize.</div>
+            <div v-for="(l, i) in jobStore.log" :key="i" class="eo-log-line">{{ l }}</div>
           </div>
         </section>
       </div>
@@ -335,7 +299,7 @@ export default {
           <div><dt>Items priced</dt><dd class="num">{{ priceCount ? fmt(priceCount) : '\u2014' }}</dd></div>
           <div><dt>Last reload</dt><dd>{{ priceWhen ? new Date(priceWhen).toLocaleTimeString() : '\u2014' }}</dd></div>
         </dl>
-        <button class="eo-btn" @click="reloadPrices" :disabled="priceLoading">Reload prices</button>
+        <button class="eo-btn" @click="reloadPrices(true)" :disabled="priceLoading">Reload prices</button>
         <p class="eo-note">Served by the local backend via blackdesertmarket. Prices are cached briefly, so reloading a page does not re-request every item.</p>
       </section>
 
@@ -343,8 +307,8 @@ export default {
         <h2 class="eo-h2">How it works</h2>
         <p>The solving is HiGHS running in the local backend. This page sends the map's current prices and modifiers to it, then loads the result back onto the map.</p>
         <ol class="eo-steps">
-          <li><b>Reload prices</b> for your region.</li>
-          <li><b>Set a CP budget</b> and click <b>Optimize</b>. <b>Stop</b> keeps the best solution found so far.</li>
+          <li><b>Set a CP budget</b> and click <b>Optimize</b>. Prices refresh automatically if they're more than 10 minutes old, so there's no need to reload them first. <b>Stop</b> keeps the best solution found so far.</li>
+          <li>The solve keeps running even if you navigate to another page - come back to <b>Optimize</b> any time to see progress.</li>
           <li>When it finishes, the empire loads onto the map and the value bar above updates.</li>
         </ol>
         <p class="eo-note" v-if="connected === false">The backend isn't responding. Make sure it's running, then reload this page.</p>

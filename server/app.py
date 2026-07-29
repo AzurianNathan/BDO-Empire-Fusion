@@ -683,12 +683,19 @@ async def compare_price_sources(region: str, lang: str) -> list[dict]:
 
 @app.get("/api/prices/{lang}/{region}")
 async def prices(lang: str, region: str) -> dict[str, Any]:
-    """Raw market prices for the Workerman map's own price store."""
+    """Raw market prices for the Workerman map's own price store.
+
+    Shaped like bdolytics.com's own /api/trpc/market.getMarket response
+    ({"result": {"data": [{"itemId": ..., "price": ...}]}}) because upstream
+    Workerman's market.js now parses that shape directly (it switched to
+    calling bdolytics itself). Matching it here means the patch that redirects
+    market.js to this endpoint only needs to change the URL, not the parsing.
+    """
     ids = _market_item_ids()
     if not ids:
         raise HTTPException(500, "No item id set; is server/static/data present?")
     base = await fetch_prices("auto", region, lang, ids)
-    return {"data": [{"item_id": int(k), "price": v} for k, v in base.items()],
+    return {"result": {"data": [{"itemId": int(k), "price": v} for k, v in base.items()]},
             "source": LAST_PRICE_SOURCE}
 
 

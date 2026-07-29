@@ -6,9 +6,11 @@ Verified-exact edits (fail loudly if upstream changes):
   1. src/stores/market.js  - price fetch      -> local /api/prices
   2. src/stores/user.js    - marketUrl getter -> local /api/prices
   3. vite.config.js        - base '/workerman/' -> '/'
-  4. src/router/index.js   - import + register the /optimize route
-  5. src/App.vue           - add the Optimize nav link
+  4. src/router/index.js   - import + register the /optimize and /workers routes
+  5. src/App.vue           - add the Optimize and Workers nav links
   6. copy OptimizeView.vue into src/views/
+  7. copy optimizeJob.js into src/stores/
+  8. copy WorkersView.vue into src/views/
 """
 import shutil
 import sys
@@ -38,9 +40,15 @@ def edit(path: Path, old: str, new: str, marker: str | None = None) -> None:
 def main() -> None:
     print(f"Patching Workerman at: {ROOT}")
 
+    # Upstream now calls bdolytics.com's own /api/trpc/market.getMarket
+    # directly (it switched to the same source this project independently
+    # adopted server-side - see CLAUDE.md's price-sources note). Redirect it
+    # to our local proxy instead: server/app.py's /api/prices/{lang}/{region}
+    # is shaped identically ({"result": {"data": [{"itemId", "price"}]}}), so
+    # only the URL needs to change - the parsing below it is untouched.
     edit(
         ROOT / "src/stores/market.js",
-        "const MARKETURL = `https://apiv2.bdolytics.com/${lang}/${userStore.selectedRegion}/market/central-market-data`",
+        "const MARKETURL = `https://bdolytics.com/api/trpc/market.getMarket?input=${input}`",
         "const MARKETURL = `/api/prices/${lang}/${userStore.selectedRegion}`",
     )
     edit(
@@ -52,6 +60,12 @@ def main() -> None:
 
     shutil.copy(PATCH_DIR / "OptimizeView.vue", ROOT / "src/views/OptimizeView.vue")
     print("  + copied OptimizeView.vue into src/views/")
+
+    shutil.copy(PATCH_DIR / "optimizeJob.js", ROOT / "src/stores/optimizeJob.js")
+    print("  + copied optimizeJob.js into src/stores/")
+
+    shutil.copy(PATCH_DIR / "WorkersView.vue", ROOT / "src/views/WorkersView.vue")
+    print("  + copied WorkersView.vue into src/views/")
 
     # Global Empire Optimizer theme, imported after Workerman's own main.css so
     # it wins on equal specificity.
@@ -87,10 +101,24 @@ def main() -> None:
     )
     edit(
         router,
+        'import HomeView from "../views/HomeView.vue";\nimport OptimizeView from "../views/OptimizeView.vue";',
+        'import HomeView from "../views/HomeView.vue";\nimport OptimizeView from "../views/OptimizeView.vue";'
+        '\nimport WorkersView from "../views/WorkersView.vue";',
+        marker='import WorkersView from "../views/WorkersView.vue";',
+    )
+    edit(
+        router,
         '    {\n      path: "/",\n      name: "home",\n      component: HomeView,\n    },',
         '    {\n      path: "/",\n      name: "home",\n      component: HomeView,\n    },\n'
         '    {\n      path: "/optimize",\n      name: "optimize",\n      component: OptimizeView,\n    },',
         marker='path: "/optimize"',
+    )
+    edit(
+        router,
+        '    {\n      path: "/optimize",\n      name: "optimize",\n      component: OptimizeView,\n    },',
+        '    {\n      path: "/optimize",\n      name: "optimize",\n      component: OptimizeView,\n    },\n'
+        '    {\n      path: "/workers",\n      name: "workers",\n      component: WorkersView,\n    },',
+        marker='path: "/workers"',
     )
     # Upstream bug: solveForTerminalPairs returns [nodes, cost], but this call
     # site uses the tuple as if it were the node array (and can return it as
@@ -108,6 +136,12 @@ def main() -> None:
         '<RouterLink to="/">Home</RouterLink>',
         '<RouterLink to="/">Home</RouterLink>\n        <RouterLink to="/optimize">Optimize</RouterLink>',
         marker='to="/optimize"',
+    )
+    edit(
+        ROOT / "src/App.vue",
+        '<RouterLink to="/optimize">Optimize</RouterLink>',
+        '<RouterLink to="/optimize">Optimize</RouterLink>\n        <RouterLink to="/workers">Workers</RouterLink>',
+        marker='to="/workers"',
     )
     print("Done.")
 
