@@ -21,9 +21,24 @@ SERVER = ROOT / "server"
 IS_WIN = os.name == "nt"
 
 
+MISSING_TOOL_HELP = {
+    "git": "Get it from https://git-scm.com/download/win (default options are fine).",
+    "npm": "Get Node.js (which includes npm) from https://nodejs.org/.",
+}
+
+
 def sh(cmd, cwd=None, shell=False):
     print(f"  $ {cmd if isinstance(cmd, str) else ' '.join(map(str, cmd))}")
-    subprocess.run(cmd, cwd=cwd, shell=shell, check=True)
+    try:
+        subprocess.run(cmd, cwd=cwd, shell=shell, check=True)
+    except FileNotFoundError:
+        # subprocess.run raises this when the executable itself can't be
+        # found (not when the command it runs fails) - i.e. the tool isn't
+        # installed or isn't on PATH. Without this, that shows up as a raw
+        # _winapi.CreateProcess traceback that gives no hint what's missing.
+        exe = Path(cmd if isinstance(cmd, str) else cmd[0]).stem.lower()
+        hint = MISSING_TOOL_HELP.get(exe, "Make sure it's installed and on your PATH.")
+        raise SystemExit(f"\n  !! '{exe}' isn't installed, or isn't on PATH. {hint}\n") from None
 
 
 def venv_python(env_dir: Path) -> Path:
