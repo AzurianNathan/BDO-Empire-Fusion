@@ -182,7 +182,14 @@ export default {
     },
     finish(d) {
       if (d.result) {
-        this.userStore.migrate(d.result)
+        // userStore.migrate() is upstream Workerman code that expects a JSON
+        // *string* (it does JSON.parse(localStored) internally, matching how
+        // App.vue calls it with localStorage.getItem('user')). d.result here
+        // is already a parsed object from r.json(), so it must be
+        // re-stringified or JSON.parse coerces it to "[object Object]" and
+        // throws - which the polling try/catch then misreports as a lost
+        // connection even though the job finished successfully.
+        this.userStore.migrate(JSON.stringify(d.result))
         this.addLog('Optimized empire loaded onto the map.')
       } else {
         this.addLog('Job finished but returned no empire.')
