@@ -86,19 +86,43 @@ tighten those validators back up without keeping the sanitising.
 An unpriced item is valued at **0** by the solver, so coverage is surfaced in
 `/api/price-status` and the Optimize page rather than swallowed.
 
-### 4. Price sources: two were removed on purpose
+### 4. Price sources: several were tried and rejected before landing on bdolytics
 
-- **arsha.io** - removed, serves stale 2025-era data. Stale prices are worse than
-  none: the solver optimises happily and returns a confidently wrong empire.
+The active source is **bdolytics.com** (`fetch_bdolytics` in `app.py`), an
+undocumented internal endpoint (`/api/trpc/market.getMarket`) its own frontend
+calls, found by inspecting its network traffic. One request returns the entire
+market catalog (thousands of items, all enhancement levels), so pricing our
+~250 ids costs a single call, cached 10 minutes. Plain server-side requests get
+a normal `200`; CORS is wide open. Verified 2026-07-29: 0 non-vendor items
+unpriced against the real ~250-item set.
+
+Everything else was ruled out, in order:
+
+- **arsha.io** - reachable, but only serves items already warm in its own
+  30-minute cache. A fresh lookup for an ordinary material gets `"blocked by
+  Imperva"` from PA's own WAF. Verified 2026-07-29: 4/4 base-level material ids
+  failed; only a famous, frequently-queried weapon succeeded.
 - **Official Pearl Abyss trade API** - removed deliberately. Pricing ~250 items
   means ~250 requests per refresh straight at PA, which risks an IP or account
-  ban. **Do not add it back.**
+  ban. **Do not add it back**, even though its `GetWorldMarketSearchList`
+  endpoint can batch ids (documented at developers.veliainn.com) - batching
+  changes the request-count math but not the "hitting PA directly" risk this
+  rule exists to avoid.
+- **garmoth.com** - has real, current market data (`/api/trpc/market.getInfo`),
+  but it's behind a Cloudflare JS challenge: plain requests get `403`. Getting
+  past that is bot-detection bypass and a likely ToS violation. Not worth it.
+- **blackdesertmarket** (`api.blackdesertmarket.com`) - was the sole source for
+  a while, but died: unreachable (connection refused/timeout) as of 2026-07-29
+  from multiple independent networks, not just this dev sandbox. `fetch_bdm`
+  is kept in `PROVIDERS` for manual selection/testing but dropped from
+  `PROVIDER_ORDER` - its per-item retry math means a dead TCP connection stalls
+  a refresh for over an hour if it's ever reached in the auto chain.
 
-That leaves `blackdesertmarket` (`api.blackdesertmarket.com`). It is one request
-per item against a community-run service, so it is kept polite: concurrency 5,
-backoff on 429/5xx, 10-minute cache. If you need fewer requests, its category
-listing endpoints (`/list/{main}/{sub}`) return many items per call; that is the
-right optimisation, not raising concurrency.
+If bdolytics ever goes the way of the others: re-run the same triage (`curl` it
+directly before touching code, a browser DevTools Network tab on the target
+site's own market page usually reveals its internal API even when undocumented,
+and always test with a plain `curl`/`httpx` request, not just a browser, since
+Cloudflare-gated endpoints look fine in a browser and fail server-side).
 
 ### 5. Theming relies on load order
 

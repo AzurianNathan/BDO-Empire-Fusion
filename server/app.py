@@ -42,6 +42,7 @@ STATIC_DIR = HERE / "static"
 DATA_DIR = STATIC_DIR / "data" / "manual"
 DEFAULT_TAX = 0.65  # Workerman's default selectedTax
 LAST_PRICE_SOURCE = ""   # which upstream URL last served prices
+_LAST_FETCH: dict[str, Any] = {}   # {"count": N, "at": epoch} from the last successful fetch_prices()
 
 REGION_MAP = {
     "NA": "na", "EU": "eu", "SEA": "sea", "MENA": "mena", "KR": "kr",
@@ -312,6 +313,62 @@ async def fetch_bdm(region: str, lang: str, ids: list[int]) -> dict[str, int]:
     return out
 
 
+# --- bdolytics.com --------------------------------------------------------------
+# An undocumented internal endpoint bdolytics.com's own frontend calls (found by
+# inspecting its network traffic; there is no published API). A single request
+# returns the ENTIRE market catalog (thousands of items, all enhancement levels),
+# so pricing our ~250 ids costs one call instead of one-per-item. No API key,
+# CORS is wide open (access-control-allow-origin: *), and it's fronted by
+# Cloudflare's CDN cache rather than a bot-challenge, so plain server-side
+# requests get a normal 200 - unlike Garmoth's market API, which sits behind a
+# Cloudflare JS challenge that blocks non-browser clients and was ruled out for
+# that reason. Verified against known item ids/prices on 2026-07-29.
+BDOLYTICS_BASE = "https://bdolytics.com/api/trpc/market.getMarket"
+BDOLYTICS_REGION_MAP = {
+    "NA": "NA", "EU": "EU", "SEA": "ASIA", "MENA": "MENA", "KR": "KR",
+    "RU": "RU", "JP": "JP", "TH": "ASIA", "TW": "TW", "SA": "SA",
+    "CONSOLE_EU": "CEU", "CONSOLE_NA": "CNA", "CONSOLE_ASIA": "CAS",
+}
+BDOLYTICS_CACHE_TTL = 600
+
+_BDOLYTICS_CACHE: dict[str, tuple[float, dict]] = {}
+
+
+async def fetch_bdolytics(region: str, lang: str, ids: list[int]) -> dict[str, int]:
+    """Fetch the whole market catalog from bdolytics.com and pick out our ids.
+
+    One request regardless of how many ids are wanted, since the endpoint
+    returns everything; cached so repeated calls in a session cost nothing.
+    """
+    global LAST_PRICE_SOURCE
+    reg = BDOLYTICS_REGION_MAP.get(region.upper(), region.upper())
+    now = time.time()
+
+    cached = _BDOLYTICS_CACHE.get(reg)
+    if cached and (now - cached[0]) < BDOLYTICS_CACHE_TTL:
+        catalog = cached[1]
+    else:
+        params = {"input": json.dumps({"language": "en", "region": reg})}
+        headers = {"User-Agent": "bdo-empire-fused/1.0", "Accept": "application/json"}
+        async with httpx.AsyncClient(timeout=30, headers=headers) as client:
+            r = await client.get(BDOLYTICS_BASE, params=params)
+            r.raise_for_status()
+            body = r.json()
+        rows = body.get("result", {}).get("data", [])
+        catalog = {str(row["itemId"]): row["price"] for row in rows
+                  if "itemId" in row and "price" in row}
+        if catalog:
+            _BDOLYTICS_CACHE[reg] = (now, catalog)
+
+    wanted = [str(i) for i in ids]
+    out = {w: catalog[w] for w in wanted if w in catalog}
+    if out:
+        missing = len(wanted) - len(out)
+        LAST_PRICE_SOURCE = (f"bdolytics ({len(out)}/{len(wanted)})"
+                             + (f" - {missing} unpriced, valued at 0" if missing else ""))
+    return out
+
+
 class PriceRequest(BaseModel):
     region: str = "EU"
     lang: str = "en"
@@ -548,27 +605,46 @@ async def optimize_stop(job_id: str) -> dict[str, str]:
 
 
 PROVIDERS = {
+    "bdolytics": ("bdolytics.com (undocumented, full-catalog)", fetch_bdolytics),
     "bdm": ("blackdesertmarket (wraps official PA)", fetch_bdm),
 }
 # Tried in this order when provider="auto".
-#   arsha.io      - removed: responds, but serves stale (2025-era) data, and stale
-#                   prices silently produce a confidently wrong empire.
-#   official PA   - removed deliberately: querying Pearl Abyss' own trade endpoint
-#                   hundreds of times per refresh is the kind of traffic that gets
-#                   an IP or account flagged. Not worth the risk for price data.
-# That leaves blackdesertmarket, which fronts the official market for us.
-PROVIDER_ORDER = ["bdm"]
+#   arsha.io           - removed: reachable, but only serves items already warm in
+#                         its own 30-min cache; a fresh lookup for an ordinary
+#                         material gets "blocked by Imperva" from PA's own WAF.
+#                         Verified 2026-07-29: 4/4 base-level material ids failed.
+#   official PA        - removed deliberately: querying Pearl Abyss' own trade
+#                         endpoint hundreds of times per refresh is the kind of
+#                         traffic that gets an IP or account flagged. Not worth
+#                         the risk for price data.
+#   garmoth.com         - not usable: its market API is real and current but sits
+#                         behind a Cloudflare JS challenge, so plain server-side
+#                         requests get a 403. Bypassing that is bot-detection
+#                         evasion, which this project won't do.
+#   blackdesertmarket   - was the sole source, but died: unreachable (connection
+#                         refused/timeout) as of 2026-07-29 from multiple
+#                         independent networks. Kept in PROVIDERS for manual
+#                         selection/testing but dropped from the auto chain so a
+#                         dead TCP connection can't stall a refresh for an hour.
+# That leaves bdolytics.com: undocumented, but a single request returns the
+# whole catalog, is CDN-cached rather than bot-gated, and checked out clean.
+PROVIDER_ORDER = ["bdolytics"]
 
 # Well-known, always-listed items used to compare sources side by side.
 async def fetch_prices(provider: str, region: str, lang: str, ids: list[int],
                        custom_url: str = "", api_key: str = "") -> dict[str, int]:
     """Resolve prices via a named provider, a custom endpoint, or the auto chain."""
+    global _LAST_FETCH
     if provider == "custom":
         if not custom_url:
             raise HTTPException(400, "Custom provider selected but no endpoint URL given.")
-        return await _fetch_custom(custom_url, api_key, region, lang, ids)
+        got = await _fetch_custom(custom_url, api_key, region, lang, ids)
+        _LAST_FETCH = {"count": len(got), "at": time.time()}
+        return got
     if provider in PROVIDERS:
-        return await PROVIDERS[provider][1](region, lang, ids)
+        got = await PROVIDERS[provider][1](region, lang, ids)
+        _LAST_FETCH = {"count": len(got), "at": time.time()}
+        return got
     attempts = []
     for key in PROVIDER_ORDER:
         try:
@@ -577,6 +653,7 @@ async def fetch_prices(provider: str, region: str, lang: str, ids: list[int],
             attempts.append(f"{key}: {type(exc).__name__}")
             continue
         if got:
+            _LAST_FETCH = {"count": len(got), "at": time.time()}
             return got
         attempts.append(f"{key}: no data")
     raise HTTPException(502, "No price source returned data. Tried -> " + " | ".join(attempts))
@@ -589,7 +666,7 @@ async def compare_price_sources(region: str, lang: str) -> list[dict]:
     """Fetch the same few items from every provider so stale data is obvious."""
     names = item_names(lang)
     results = []
-    for key in PROVIDER_ORDER:
+    for key in PROVIDERS:
         label, fn = PROVIDERS[key]
         try:
             got = await fn(region, lang, list(COMPARE_IDS))
@@ -629,12 +706,11 @@ async def price_status() -> dict[str, Any]:
     solver, so the shortfall is reported here and shown in the UI.
     """
     expected = len(_market_item_ids())
-    cached = _PRICE_CACHE.get(("bdm", "eu", "en"))
     return {
         "source": LAST_PRICE_SOURCE or "no prices fetched yet",
         "expected": expected,
-        "cachedItems": len(cached[1]) if cached else 0,
-        "cacheAgeSeconds": int(time.time() - cached[0]) if cached else None,
+        "cachedItems": _LAST_FETCH.get("count", 0),
+        "cacheAgeSeconds": int(time.time() - _LAST_FETCH["at"]) if _LAST_FETCH else None,
     }
 
 
