@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Empire Optimizer</title>
+<style>
+  :root{
+    --ink:#14110c; --panel:#1e1a12; --panel2:#241f16; --line:#3a3123;
+    --parch:#e9ddc4; --muted:#9a8f79; --brass:#c8a24c; --brass2:#e6c169;
+    --jade:#4c9e86; --danger:#c9604e; --silver:#d6dcea;
+  }
+  *{box-sizing:border-box}
+  body{background:var(--ink);color:var(--parch);font-family:ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif;
+    margin:0;padding:24px;font-size:14px;line-height:1.5}
+  .wrap{max-width:960px;margin:0 auto}
+  .num{font-family:ui-monospace,Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}
+  header{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:18px}
+  .brand{display:flex;align-items:center;gap:12px}
+  .mark{color:var(--brass);font-size:22px}
+  .word{font-family:Iowan Old Style,Georgia,serif;font-size:20px;color:#f3ead4}
+  .sub{color:var(--muted);font-size:12px}
+  .conn{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;padding:5px 10px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+  .conn.ok{color:var(--jade);border-color:rgba(76,158,134,.5)}
+  .conn.bad{color:var(--danger);border-color:rgba(201,96,78,.5)}
+  .value{border:1px solid var(--line);border-radius:14px;padding:18px 20px;margin-bottom:18px;
+    background:radial-gradient(120% 140% at 0% 0%, rgba(200,162,76,.10), transparent 60%),linear-gradient(180deg,var(--panel2),var(--panel));
+    display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap}
+  .value .big{font-size:clamp(26px,5vw,40px);color:var(--brass2);line-height:1}
+  .value .unit{color:var(--muted);font-size:11px;letter-spacing:.16em;text-transform:uppercase;margin-top:6px}
+  .tiles{display:flex;gap:10px;flex-wrap:wrap}
+  .tile{border:1px solid var(--line);border-radius:10px;padding:9px 13px;min-width:88px;background:rgba(0,0,0,.15)}
+  .tile .v{font-size:16px;color:var(--silver)}
+  .tile .l{font-size:10.5px;color:var(--muted);text-transform:uppercase;margin-top:3px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:720px){.grid{grid-template-columns:1fr}}
+  .span{grid-column:1/-1}
+  .card{border:1px solid var(--line);border-radius:12px;padding:18px;background:var(--panel)}
+  h2{font-family:Iowan Old Style,Georgia,serif;font-size:15px;margin:0 0 14px;color:#f0e6cf;font-weight:600}
+  .field{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
+  .field label{color:var(--muted);font-size:13px}
+  input,select,button{font-family:inherit;font-size:14px}
+  input,select{background:var(--ink);color:var(--parch);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:120px}
+  input:focus,select:focus{outline:none;border-color:var(--brass)}
+  .btn{background:var(--panel2);color:var(--parch);border:1px solid var(--line);border-radius:9px;padding:9px 16px;cursor:pointer}
+  .btn:hover:not(:disabled){border-color:var(--brass)}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+  .btn.primary{background:linear-gradient(180deg,var(--brass2),var(--brass));color:#241a06;border-color:var(--brass);font-weight:600}
+  .btn.danger{background:linear-gradient(180deg,#d8715e,var(--danger));color:#2a0f0a;border-color:var(--danger);font-weight:600}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .note{color:var(--muted);font-size:12px;margin:12px 0 0}
+  .pstate{display:flex;align-items:center;gap:9px;font-size:13px;margin:4px 0 12px}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--muted)}
+  .dot.ok{background:var(--jade);box-shadow:0 0 8px rgba(76,158,134,.6)}
+  .dot.bad{background:var(--danger)}
+  .jobline{margin:12px 0 0;font-size:13px;color:var(--muted)}
+  .jobline.run{color:var(--jade)} .jobline.done{color:var(--brass2)} .jobline.err{color:var(--danger)}
+  .log{background:var(--ink);border:1px solid var(--line);border-radius:9px;padding:12px;height:180px;overflow:auto;
+    font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:#bcae90}
+  .banner{border:1px solid rgba(230,193,105,.35);background:rgba(200,162,76,.07);border-radius:10px;padding:10px 14px;margin-bottom:16px;font-size:12.5px;color:#cdbf9e}
+  a{color:var(--brass2)}
+  code{background:var(--ink);border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-family:ui-monospace,monospace;font-size:11.5px;color:var(--brass2)}
+  .chk{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px;margin:4px 0 12px;cursor:pointer}
+  .chk input{min-width:auto}
+  .tablewrap{max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:9px}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{position:sticky;top:0;background:var(--panel2);color:var(--muted);text-align:left;font-weight:500;
+     padding:8px 10px;border-bottom:1px solid var(--line);text-transform:uppercase;font-size:10.5px;letter-spacing:.05em}
+  td{padding:5px 10px;border-bottom:1px solid rgba(58,49,35,.5)}
+  tr:hover td{background:rgba(200,162,76,.04)}
+  td.num{text-align:right;font-family:ui-monospace,monospace;font-variant-numeric:tabular-nums}
+  td.eff{color:var(--brass2)}
+  .vtag{color:var(--muted);font-size:10px;border:1px solid var(--line);border-radius:4px;padding:0 4px;margin-left:6px}
+  table input[type=number]{width:92px;padding:3px 6px;font-size:12px;min-width:0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <span class="mark">&#9670;</span>
+      <div><div class="word">Empire Optimizer</div><div class="sub">Workerman &times; bdo-empire &middot; standalone panel</div></div>
+    </div>
+    <span id="conn" class="conn">Checking...</span>
+  </header>
+
+  <div class="banner">
+    The full Workerman map isn't built (it needs a WASM module shrddr doesn't ship). This standalone
+    panel gives you the optimizer directly: pull live prices, solve, and download an empire to import
+    into Workerman. See the README's WASM note to enable the in-map version.
+  </div>
+
+  <div class="value">
+    <div><div id="valNum" class="big num">&mdash;</div><div class="unit">total daily value (from solver)</div></div>
+    <div class="tiles">
+      <div class="tile"><div id="tBudget" class="v num">&mdash;</div><div class="l">CP budget</div></div>
+      <div class="tile"><div id="tWorkers" class="v num">&mdash;</div><div class="l">Workers</div></div>
+      <div class="tile"><div id="tNodes" class="v num">&mdash;</div><div class="l">Forced nodes</div></div>
+      <div class="tile"><div id="tItems" class="v num">&mdash;</div><div class="l">Items priced</div></div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <section class="card">
+      <h2>1 &middot; Settings</h2>
+      <div class="pstate"><span id="pdot" class="dot"></span><span id="pstate">No prices loaded</span></div>
+
+      <div class="field"><label>Server</label>
+        <select id="region"><option>EU</option><option>NA</option><option>SEA</option><option>MENA</option><option>KR</option><option>RU</option><option>JP</option><option>TH</option><option>TW</option><option>SA</option></select>
+      </div>
+      <div class="field"><label>Lang</label>
+        <select id="lang"><option value="en">en</option><option value="jp">jp</option><option value="ko">ko</option><option value="ru">ru</option><option value="tw">tw</option></select>
+      </div>
+      <div class="field"><label>Tax</label>
+        <select id="tax">
+          <option value="0.65">0.65 (0)</option>
+          <option value="0.65325">0.65325 (1000)</option>
+          <option value="0.6565">0.6565 (4000)</option>
+          <option value="0.65975">0.65975 (7000)</option>
+          <option value="0.69225">0.69225 (7000 + ring)</option>
+          <option value="0.845">0.845 (0 + VP)</option>
+          <option value="0.84825">0.84825 (1000 + VP)</option>
+          <option value="0.8515">0.8515 (4000 + VP)</option>
+          <option value="0.85475" selected>0.85475 (7000 + VP)</option>
+          <option value="0.88725">0.88725 (7000 + ring + VP)</option>
+          <option value="1">1 (just hoarding)</option>
+        </select>
+      </div>
+      <label class="chk"><input type="checkbox" id="farmEnable" /> Farming enable</label>
+      <div class="field" id="farmRow" style="display:none"><label>Farming silver/day</label><input id="farming" type="number" min="0" value="0" /></div>
+
+      <div class="field"><label>Price source</label>
+        <select id="provider">
+          <option value="auto">Auto (best available)</option>
+          <option value="bdm">blackdesertmarket</option>
+          <option value="custom">Custom endpoint + key</option>
+        </select>
+      </div>
+      <div id="customRow" style="display:none">
+        <div class="field"><label>Endpoint URL</label><input id="customUrl" placeholder="https://.../{region}/item?id={ids}" style="min-width:200px" /></div>
+        <div class="field"><label>API key</label><input id="apiKey" type="password" placeholder="paste key" /></div>
+        <p class="note">Placeholders: <code>{region}</code> <code>{lang}</code> <code>{ids}</code>. Key is sent as
+          <code>Authorization: Bearer</code> and <code>x-api-key</code>. Kept in this browser only, never saved to disk.</p>
+      </div>
+
+      <div class="row" style="margin-top:10px">
+        <button id="fetchPrices" class="btn">Reload prices</button>
+        <label class="btn" style="cursor:pointer">Import&hellip;<input id="fileInput" type="file" accept="application/json" hidden /></label>
+        <button id="exportPrices" class="btn" disabled>Export</button>
+        <button id="clearOverrides" class="btn">Clear</button>
+        <button id="cmpBtn" class="btn">Compare sources</button>
+      </div>
+      <p class="note">Tax, Custom and Keep are applied exactly as Workerman does: market price &rarr; tax
+        (skipped for Keep and vendor items) &rarr; crafted items valued from components.</p>
+    </section>
+
+    <section class="card">
+      <h2>2 &middot; Solve</h2>
+      <div class="field"><label>CP budget</label><input id="budget" type="number" min="1" value="500" /></div>
+      <div class="field"><label>Farming silver / day</label><input id="farming" type="number" min="0" value="0" /></div>
+      <div class="field"><label>MIP relative gap</label><input id="gap" value="0.0001" /></div>
+      <div class="row">
+        <button id="optimize" class="btn primary" disabled>Optimize</button>
+        <button id="stop" class="btn danger" disabled>Stop</button>
+        <button id="download" class="btn" disabled>Download empire</button>
+      </div>
+      <p id="jobline" class="jobline">Idle</p>
+    </section>
+
+    <section class="card span">
+      <h2>Market prices</h2>
+      <div id="tableWrap" class="tablewrap"><p class="note" style="margin:0">Reload prices to list items.</p></div>
+    </section>
+
+    <section class="card span">
+      <h2>Activity</h2>
+      <div id="log" class="log"></div>
+    </section>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const fmt = (n) => new Intl.NumberFormat("en-US").format(Math.round(n || 0));
+let state = { prices: null, farming: 0, itemCount: 0, job: null, poll: null, result: null, cursor: 0 };
+
+function log(line){
+  const el = $("log");
+  const div = document.createElement("div");
+  div.textContent = new Date().toLocaleTimeString() + "  " + line;
+  el.appendChild(div); el.scrollTop = el.scrollHeight;
+}
+function setJob(text, cls){ const j = $("jobline"); j.textContent = text; j.className = "jobline " + (cls||""); }
+function priceReady(count, source){
+  state.itemCount = count;
+  $("pdot").className = "dot ok";
+  $("pstate").textContent = fmt(count) + " items \u00b7 " + source;
+  $("tItems").textContent = fmt(count);
+  $("optimize").disabled = false;
+}
+
+// health
+fetch("/api/health").then(r => r.ok ? r.json() : Promise.reject()).then(() => {
+  $("conn").textContent = "Backend connected"; $("conn").className = "conn ok"; log("Backend connected.");
+}).catch(() => { $("conn").textContent = "Backend offline"; $("conn").className = "conn bad"; });
+
+// settings wiring
+$("provider").onchange = () => {
+  $("customRow").style.display = $("provider").value === "custom" ? "" : "none";
+};
+$("farmEnable").onchange = () => {
+  $("farmRow").style.display = $("farmEnable").checked ? "" : "none";
+  if(!$("farmEnable").checked) $("farming").value = 0;
+};
+
+let overrides = { custom: {}, keep: {} };
+
+function priceBody(){
+  return {
+    region: $("region").value,
+    lang: $("lang").value,
+    tax: Number($("tax").value),
+    keepItems: overrides.keep,
+    customPrices: overrides.custom,
+    provider: $("provider").value,
+    customUrl: $("customUrl").value.trim(),
+    apiKey: $("apiKey").value,
+  };
+}
+
+async function loadPrices(){
+  $("fetchPrices").disabled = true;
+  log("Fetching prices for " + $("region").value + " (tax " + $("tax").value + ")...");
+  $("pdot").className = "dot"; $("pstate").textContent = "Loading...";
+  try{
+    const r = await fetch("/api/effective-prices", {
+      method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(priceBody())
+    });
+    if(!r.ok){
+      let detail = "server " + r.status;
+      try{ const j = await r.json(); if(j.detail) detail = j.detail; }catch(_){}
+      throw new Error(detail);
+    }
+    const d = await r.json();
+    state.prices = d.effectivePrices;
+    priceReady(d.count, ($("provider").value === "custom" ? "custom" : $("provider").options[$("provider").selectedIndex].text) + " \u00b7 " + d.region);
+    renderTable(d.rows);
+    $("exportPrices").disabled = false;
+    log("Prices ready: " + fmt(d.count) + " items.");
+    if(d.source) log("Source: " + d.source);
+  }catch(e){
+    $("pdot").className = "dot bad"; $("pstate").textContent = "Fetch failed";
+    log("Price fetch failed: " + e.message);
+  }finally{ $("fetchPrices").disabled = false; }
+}
+$("fetchPrices").onclick = loadPrices;
+
+function renderTable(rows){
+  if(!rows || !rows.length){ $("tableWrap").innerHTML = '<p class="note" style="margin:0">No rows.</p>'; return; }
+  const head = '<tr><th>Item</th><th style="text-align:right">Market</th><th>Custom</th><th>Keep</th><th style="text-align:right">Effective</th></tr>';
+  const body = rows.map(r =>
+    '<tr data-id="' + r.id + '">' +
+      '<td>' + r.name + (r.vendor ? '<span class="vtag">vendor</span>' : '') + '</td>' +
+      '<td class="num">' + (r.market == null ? "\u2014" : fmt(r.market)) + '</td>' +
+      '<td><input type="number" class="cust" min="0" value="' + (r.custom === "" ? "" : r.custom) + '" /></td>' +
+      '<td><input type="checkbox" class="keep"' + (r.keep ? " checked" : "") + ' /></td>' +
+      '<td class="num eff">' + fmt(r.effective) + '</td>' +
+    '</tr>').join("");
+  $("tableWrap").innerHTML = '<table><thead>' + head + '</thead><tbody>' + body + '</tbody></table>';
+  $("tableWrap").querySelectorAll("tr[data-id]").forEach(tr => {
+    const id = tr.dataset.id;
+    tr.querySelector(".cust").onchange = (e) => {
+      const v = e.target.value;
+      if(v === "") delete overrides.custom[id]; else overrides.custom[id] = Number(v);
+    };
+    tr.querySelector(".keep").onchange = (e) => {
+      if(e.target.checked) overrides.keep[id] = true; else delete overrides.keep[id];
+    };
+  });
+}
+
+// import / export / clear
+$("fileInput").onchange = (ev) => {
+  const file = ev.target.files[0]; if(!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try{
+      const j = JSON.parse(reader.result);
+      if(j.customPrices || j.keepItems){
+        overrides.custom = j.customPrices || {};
+        overrides.keep = j.keepItems || {};
+        if(j.tax) $("tax").value = String(j.tax);
+        log("Imported overrides: " + Object.keys(overrides.custom).length + " custom, " + Object.keys(overrides.keep).length + " keep. Reloading...");
+        loadPrices();
+      }else if(j.effectivePrices){
+        state.prices = j.effectivePrices;
+        if(j.farmingWorkerSilverPerDay){ $("farmEnable").checked = true; $("farmEnable").onchange(); $("farming").value = j.farmingWorkerSilverPerDay; }
+        priceReady(Object.keys(j.effectivePrices).length, "import file");
+        log("Loaded price export: " + fmt(Object.keys(j.effectivePrices).length) + " items.");
+      }else{ throw new Error("no effectivePrices / customPrices field"); }
+    }catch(e){ log("Could not read import: " + e.message); }
+  };
+  reader.readAsText(file);
+};
+
+$("exportPrices").onclick = () => {
+  const payload = {
+    effectivePrices: state.prices,
+    farmingWorkerSilverPerDay: Number($("farming").value) || 0,
+    tax: Number($("tax").value),
+    customPrices: overrides.custom,
+    keepItems: overrides.keep,
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type:"application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = "prices.json"; a.click();
+};
+
+$("cmpBtn").onclick = async () => {
+  $("cmpBtn").disabled = true;
+  log("Fetching the same items from every source (compare against in-game to spot stale data)...");
+  try{
+    const r = await fetch("/api/compare-sources/" + $("region").value + "?lang=" + $("lang").value);
+    const d = await r.json();
+    for(const x of d.results){
+      const parts = Object.entries(x.prices).map(([n,v]) => n + "=" + (v==null?"-":fmt(v)));
+      log((x.ok?"  ":"  x ") + x.label + " -> " + (parts.length?parts.join("  "):x.detail));
+    }
+    log("Whichever row matches your in-game prices is the live one; select it above.");
+  }catch(e){ log("Compare failed: " + e.message); }
+  finally{ $("cmpBtn").disabled = false; }
+};
+
+$("clearOverrides").onclick = () => {
+  overrides = { custom: {}, keep: {} };
+  log("Cleared custom prices and keep flags.");
+  if(state.prices) loadPrices();
+};
+
+// optimize
+$("optimize").onclick = async () => {
+  if(!state.prices){ log("Load prices first."); return; }
+  $("valNum").textContent = "..."; $("download").disabled = true; state.result = null;
+  const budget = Number($("budget").value);
+  $("tBudget").textContent = fmt(budget);
+  let dropped = 0;
+  const clean = {};
+  for(const k in (state.prices||{})){
+    const v = Number(state.prices[k]);
+    if(Number.isFinite(v)) clean[k] = v; else dropped++;
+  }
+  if(dropped) log(dropped + " item(s) had no usable price and will be valued at 0.");
+  const body = {
+    budget,
+    effectivePrices: clean,
+    droppedPrices: dropped,
+    farmingWorkerSilverPerDay: $("farmEnable").checked ? (Number($("farming").value) || 0) : 0,
+    modifiers: {},
+    baseEmpire: null,
+    solverOverrides: { mip_rel_gap: Number($("gap").value) || 0.0001 },
+  };
+  setJob("Starting...", "run"); $("optimize").disabled = true; $("stop").disabled = false;
+  log("Optimize starting - budget " + budget + " CP.");
+  try{
+    const r = await fetch("/api/optimize", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
+    const d = await r.json(); state.job = d.job_id; state.cursor = 0;
+    setJob("Solving...", "run"); log("Job " + d.job_id.slice(0,8) + " running. Large budgets can take a while.");
+    poll();
+  }catch(e){ setJob("Failed to start", "err"); log("Failed: " + e.message); $("optimize").disabled=false; $("stop").disabled=true; }
+};
+
+function poll(){
+  state.poll = setInterval(async () => {
+    try{
+      const r = await fetch("/api/optimize/" + state.job + "?since=" + state.cursor);
+      const d = await r.json();
+      if(d.lines && d.lines.length){
+        for(const ln of d.lines) log("  " + ln);
+        state.cursor = d.cursor;
+      }
+      if(d.status === "done" || d.status === "stopped"){ clearInterval(state.poll); finish(d); }
+      else if(d.status === "error"){ clearInterval(state.poll); setJob("Solver error", "err"); log("Solver error (see server console)."); reset(); }
+    }catch(e){ clearInterval(state.poll); setJob("Lost server", "err"); log("Lost contact: " + e.message); reset(); }
+  }, 2000);
+}
+function finish(d){
+  reset();
+  if(d.result){
+    state.result = d.result;
+    const workers = (d.result.userWorkers||[]).length;
+    const nodes = (d.result.grindTakenList||[]).length;
+    $("tWorkers").textContent = fmt(workers);
+    $("tNodes").textContent = fmt(nodes);
+    $("valNum").textContent = "ready";
+    $("download").disabled = false;
+    setJob(d.status === "stopped" ? "Stopped (best so far)" : "Done", "done");
+    log("Optimized empire ready: " + workers + " workers. Download and import into Workerman.");
+  }else{ setJob("No empire returned", "err"); }
+}
+function reset(){ $("optimize").disabled = false; $("stop").disabled = true; }
+
+$("stop").onclick = async () => {
+  if(!state.job) return;
+  log("Stopping - keeps best solution so far.");
+  await fetch("/api/optimize/" + state.job + "/stop", { method:"POST" });
+};
+
+$("download").onclick = () => {
+  if(!state.result) return;
+  const blob = new Blob([JSON.stringify(state.result, null, 2)], { type:"application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = "optimized_empire.json"; a.click();
+};
+</script>
+</body>
+</html>
