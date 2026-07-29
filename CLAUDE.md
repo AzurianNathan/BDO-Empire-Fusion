@@ -96,6 +96,13 @@ market catalog (thousands of items, all enhancement levels), so pricing our
 a normal `200`; CORS is wide open. Verified 2026-07-29: 0 non-vendor items
 unpriced against the real ~250-item set.
 
+This was cleared with a moderator in the Workerman/BDO tools Discord's
+`#suggest-a-feature` channel on 2026-07-29 (asked explicitly: "Are you okay
+with the application pulling data off bdolytics as a source, as every other
+source threw errors or blocked outright" - confirmed "yeah of course"), so the
+"undocumented API" caveat is a technical note, not an open permissions
+question.
+
 Everything else was ruled out, in order:
 
 - **arsha.io** - reachable, but only serves items already warm in its own
