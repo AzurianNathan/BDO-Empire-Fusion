@@ -13,7 +13,9 @@ re-check them against upstream main.py.
 from __future__ import annotations
 
 import copy
+import json
 from math import inf
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 from bdo_empire.api_common import FARMING_WORKER_SILVER_PER_DAY_KEY
@@ -22,6 +24,9 @@ from bdo_empire.generate_graph_data import generate_graph_data
 from bdo_empire.optimize_highspy import optimize as optimize_highspy
 from bdo_empire.solver_highspy import SolverController
 from bdo_empire.generate_workerman_data import generate_workerman_data
+
+HERE = Path(__file__).resolve().parent
+_STATIC_DATA = HERE / "static" / "data"
 
 # --- constants copied from bdo_empire/main.py ---------------------------------
 
@@ -68,6 +73,78 @@ def default_lodging_specifications() -> dict[str, dict[str, int]]:
     }
 
 
+# --- base-empire worker carry-forward -------------------------------------------
+# bdo-empire's own extract_base_empire() only understands active plantzone-job
+# workers (it pins their (plantzone, town) as a solved constraint) and either
+# errors on or drops everything else: idle workers (job is None), and
+# workshop/custom/farming-job workers, whose `job` dict has no `pzk` key at all.
+# The empire -> Workerman export is also rebuilt entirely from the solved graph,
+# so even a carried-over worker's real stats/skills/label get replaced by a
+# generic profile. See docs/optimizer-feature-proposals.md for the full writeup
+# (this mirrors bdo-empire issue #9's proposed fix). Both are fixed here, in our
+# own code, without needing any change to the bdo_empire package itself: workers
+# bdo-empire can't handle are kept out of what it's given and reattached to the
+# result unchanged, with their occupied lodging folded into the town's
+# `reserved` count so the solver's own capacity accounting still reflects them.
+
+_tnk_to_town_name_cache: Optional[dict[int, str]] = None
+
+
+def _tnk_to_town_name() -> dict[int, str]:
+    """Map a worker's `tnk` (Workerman's own town-node key) to the English town
+    name lodging_specifications is keyed by. Sourced from Workerman's own game
+    data (server/static/data/regioninfo.json's waypoint/key pair gives
+    tnk -> tk; loc.json's en.town gives tk -> name) since `tnk` is a
+    Workerman-domain concept, not something bdo-empire's own reference data
+    indexes. Loaded once and cached; these files only change via a rebuild,
+    which requires a server restart anyway."""
+    global _tnk_to_town_name_cache
+    if _tnk_to_town_name_cache is not None:
+        return _tnk_to_town_name_cache
+    try:
+        regioninfo = json.loads((_STATIC_DATA / "regioninfo.json").read_text(encoding="utf-8"))
+        town_names = json.loads((_STATIC_DATA / "loc.json").read_text(encoding="utf-8"))["en"]["town"]
+    except FileNotFoundError:
+        _tnk_to_town_name_cache = {}
+        return _tnk_to_town_name_cache
+    mapping: dict[int, str] = {}
+    for info in regioninfo.values():
+        tnk = info.get("waypoint", 0)
+        if tnk:
+            name = town_names.get(str(info["key"]))
+            if name:
+                mapping[tnk] = name
+    _tnk_to_town_name_cache = mapping
+    return mapping
+
+
+def _split_base_empire(
+    base_empire: Optional[dict],
+) -> tuple[Optional[dict], list[dict], dict[str, int]]:
+    """Split base_empire's userWorkers into what bdo-empire can pin (active
+    plantzone jobs) vs everything else, which it silently drops or errors on
+    today. Returns (solver_base_empire, carry_forward_workers, reserved_beds)."""
+    if not base_empire or not base_empire.get("userWorkers"):
+        return base_empire, [], {}
+
+    tnk_to_name = _tnk_to_town_name()
+    plantzone_workers: list[dict] = []
+    carry_forward: list[dict] = []
+    reserved_beds: dict[str, int] = {}
+    for worker in base_empire["userWorkers"]:
+        job = worker.get("job")
+        if isinstance(job, dict) and job.get("kind") == "plantzone" and job.get("pzk") is not None:
+            plantzone_workers.append(worker)
+        else:
+            carry_forward.append(worker)
+            town = tnk_to_name.get(worker.get("tnk"))
+            if town:
+                reserved_beds[town] = reserved_beds.get(town, 0) + 1
+
+    solver_base_empire = {**base_empire, "userWorkers": plantzone_workers}
+    return solver_base_empire, carry_forward, reserved_beds
+
+
 # --- the actual run -----------------------------------------------------------
 
 def run_optimization(
@@ -104,7 +181,14 @@ def run_optimization(
     prices[FARMING_WORKER_SILVER_PER_DAY_KEY] = farming_worker_silver_per_day
 
     modifiers = modifiers or {}
+    solver_base_empire, carry_forward, reserved_beds = _split_base_empire(base_empire)
+
     lodging_specs = lodging or default_lodging_specifications()
+    if reserved_beds:
+        lodging_specs = copy.deepcopy(lodging_specs)
+        for town, count in reserved_beds.items():
+            if town in lodging_specs:
+                lodging_specs[town]["reserved"] += count
     forced = forced_taken or []
 
     if on_start:
@@ -112,8 +196,10 @@ def run_optimization(
 
     data = generate_reference_data(config, prices, modifiers, lodging_specs, forced)
     data = generate_graph_data(data)
-    data["base_empire"] = base_empire  # None is valid (from-scratch)
+    data["base_empire"] = solver_base_empire  # None is valid (from-scratch)
 
     highs_results = optimize_highspy(data, controller)
     workerman_json = generate_workerman_data(highs_results, lodging_specs, data)
+    if carry_forward:
+        workerman_json["userWorkers"] = workerman_json.get("userWorkers", []) + carry_forward
     return workerman_json
