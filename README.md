@@ -6,9 +6,9 @@ Fusing [bdo-empire](https://github.com/Thell/bdo-empire) and
 Workerman is the worker-empire planner; bdo-empire is a HiGHS-based optimizer that
 finds the best empire for a given CP budget. Normally you export prices from one,
 run the other as a desktop app, then import the result back. This fuses them: one
-local server hosts the Workerman map with an added **Optimize** page, feeds it live
-market prices, runs the solver in place, and drops the solved empire straight onto
-the map.
+local server hosts the Workerman map with an added **Optimize** page and a new
+**Workers** page, feeds it live market prices, runs the solver in place, and drops
+the solved empire straight onto the map.
 
 ## What is in this repository
 
@@ -26,6 +26,8 @@ server/
 patches/
   apply_patches.py        rewires a clean workermanjs checkout
   OptimizeView.vue        the in-map Optimize page
+  optimizeJob.js          Pinia store: optimize job state survives page navigation
+  WorkersView.vue         the in-map Workers page (add/edit workers by town)
   noderouter.js           pure-JS replacement for the unshipped WASM router
   theme.css               global theme
 tests/
@@ -38,13 +40,13 @@ tests/
   the data pipeline and the planner this is built around.
 - **[Thell](https://github.com/Thell/bdo-empire)** for bdo-empire, the optimizer
   doing the actual work.
-- **[blackdesertmarket](https://github.com/sobekcore/blackdesertmarket)** for the
-  market API this reads prices from.
+- **[bdolytics](https://bdolytics.com)** for the market data this reads prices
+  from, and for clearing its use here directly with us.
 
 ## Licence and a note on Workerman
 
 This repository is MIT (see `LICENSE`). That covers the server, the node router,
-the theme, the Optimize page and the patch scripts.
+the theme, the Optimize/Workers pages and the patch scripts.
 
 Workerman itself has **no licence file**, which means all rights are reserved by
 its author. That is why this project is built as a patch tool rather than a fork:
@@ -58,12 +60,20 @@ The solving is HiGHS running in Python (solves take minutes to over an hour), so
 it can't live in the browser. One local FastAPI process:
 
 1. serves the patched Workerman UI,
-2. exposes `/api/prices` (fetched server-side from arsha.io), and
+2. exposes `/api/prices` (fetched server-side from bdolytics.com), and
 3. exposes `/api/optimize`, calling bdo-empire's solver pipeline directly.
 
-The new **Optimize** page (`/optimize`) reads the map's live prices/modifiers
-from its Pinia stores, sends them to the backend, and loads the result back with
-the same `migrate()` call the app uses for a saved empire.
+The **Optimize** page (`/optimize`) reads the map's live prices/modifiers from its
+Pinia stores, sends them to the backend, and loads the result back with the same
+`migrate()` call the app uses for a saved empire. A running solve survives
+navigating to another page - job state lives in its own store
+(`patches/optimizeJob.js`), not the page component, and the Activity log streams
+the solver's real progress lines rather than just start/stop messages.
+
+The **Workers** page (`/workers`) is a standalone, town-by-town worker manager -
+add, edit, hire, fire, and send workers for every town from one page instead of
+going through the map. It reuses the map's own components and Pinia store, so
+it's the same data either way.
 
 ## Requirements
 
@@ -78,7 +88,7 @@ python build.py        # sets up the backend, then tries to build the map UI
 run.bat                # Windows  (or:  .\run.ps1)
 ```
 
-Then open http://127.0.0.1:8000/ and click **Optimize** in the top nav.
+Then open http://127.0.0.1:8000/ and use **Optimize** or **Workers** in the top nav.
 
 `python build.py --backend` sets up only the backend (skips the map build).
 The backend is always set up first and independently, so `run` works even if the
@@ -86,13 +96,13 @@ map build can't complete.
 
 ## Two ways to run
 
-**With the map (default).** Optimize is a page in the Workerman map; results
-load straight onto it. This now builds with no WASM toolchain, see the node
-router section below.
+**With the map (default).** Optimize and Workers are pages in the Workerman map;
+optimize results load straight onto it. This builds with no WASM toolchain, see
+the node router section below.
 
 **Without the map (works today, no WASM, no Node build).** If the map isn't
 built, `/` serves a self-contained control panel instead. It talks to the same
-backend: pull live prices for your region (arsha.io, with Workerman's tax and
+backend: pull live prices for your region (bdolytics.com, with Workerman's tax and
 crafted-value treatment applied server-side), set a CP budget, solve, and
 download an `optimized_empire.json` to import into Workerman. You can also load a
 Workerman price export for an exact match to your in-game tax/custom prices.
@@ -136,36 +146,36 @@ and the patcher leaves it alone: a genuine module always wins.
 
 ## What was verified vs. what to confirm
 
-Verified here:
-- Backend venv builds and installs; server boots; all `/api` routes live. ✅
-- The standalone panel is served at `/`; `/data/*` files serve; upstream price
-  failures return a clean 502. ✅
-- Effective-price math ported from Workerman's `prices` getter and unit-tested
-  against the real data files (tax, vendor, crafted-from-components). ✅
-- Optimizer pipeline runs headlessly; job model runs it to a terminal state. ✅
-- **The map UI builds and is served.** `python build.py` completes, the bundle
-  contains the router and the Optimize route, the price URLs are rewired, and no
-  bdolytics references remain. ✅
-- **The JS node router** returns genuinely connected subgraphs on the real map
+Verified here, by actually running the app rather than just reading the code:
+
+- Backend venv builds and installs; server boots; all `/api` routes live.
+- The map UI builds and is served; the bundle contains the router and the
+  Optimize/Workers routes, and the price URLs are rewired to the local backend.
+- Live prices via bdolytics.com: confirmed end-to-end with a running server
+  (full catalog fetched in a single request, real current prices, cached
+  10 minutes), not just that the endpoint responds.
+- A full solve, start to finish, with real prices - not just that the plumbing
+  is wired up. Job progress streams into the Activity log, the result loads
+  onto the map automatically, and the job survives navigating to another page
+  mid-solve.
+- The JS node router returns genuinely connected subgraphs on the real map
   (verified independently of the router's own code), reports exact CP, and
   matched proven-optimal MIP solutions on every instance HiGHS solved to
   completion. Edge cases (empty/null input, unknown keys, duplicate sources,
-  string keys, unknown options) all handled. See `tests/`. ✅
+  string keys, unknown options) all handled. See `tests/`.
 
-Confirm on your machine:
-- **arsha endpoint**: still not live-tested (the sandbox blocks arsha.io), but the
-  fetch now tries four known URL shapes in order and reports which one served the
-  prices in the activity log, so first run tells you the answer. Region slugs and
-  the versioned path shape were verified against the `bdomarket` package's source.
-  Legacy note on the exact call
-  (`/v2/{region}/item?id=…`, base level, `basePrice` with `pricePerOne`/
-  `lastSoldPrice` fallbacks) couldn't be live-tested. **To verify:** start the
-  app, open the panel, click **Fetch live prices**. Success shows an item count;
-  failure now prints arsha's actual error in the activity log. If the field
-  names differ, adjust the one function `server/app.py` → `_fetch_arsha_base`
-  (and `_row_price`). The price-export upload path works regardless.
-- **A full solve** with your real prices (the sandbox had no price data and
-  solves are slow). Plumbing is proven; only a real end-to-end run isn't.
+Confirm on your machine / known gaps:
+
+- **There is no automated test suite for the server** (`server/app.py`) yet -
+  price fetching, effective-price math, and the job lifecycle are all verified
+  by hand against a live server, not by a `pytest` suite. This is a real gap
+  worth closing; contributions welcome.
+- **bdolytics.com is an undocumented API** (found by inspecting its own
+  frontend's network traffic, not a published integration) - see `CLAUDE.md`
+  for the full evaluation trail and what to do if it ever stops working.
+- A running optimize job survives navigating to another page in the app, but
+  **not a full browser refresh or tab close** - that would need job state
+  persisted to `localStorage` and resumed on boot, which isn't built yet.
 - At optimize time bdo-empire refreshes its game data from GitHub; needs normal
   internet, degrades gracefully offline.
 
@@ -182,59 +192,40 @@ patches/
   noderouter.js          pure-JS replacement for the unpublished WASM router
   apply_patches.py       rewires a clean workermanjs checkout
   OptimizeView.vue       the integrated Optimize page
+  optimizeJob.js         optimize job state, lives outside the page component
+  WorkersView.vue        the integrated Workers page
 ```
-
-
-## Note on the `bdomarket` PyPI package
-
-`bdomarket` is a maintained Python client for the same arsha.io API. It is **not**
-used as a dependency here, for three reasons:
-
-1. **It never sends the region.** `ArshaMarket` stores `_api_region` from its
-   `MarketRegion` argument but no request in that class uses it, so every call
-   hits `https://api.arsha.io/<endpoint>?lang=..` with no region. On EU you would
-   silently get default-region prices.
-2. **Licensing.** It is GPL-3.0 (copyleft). `bdo-empire` is Unlicense and
-   Workerman is permissive, so adding it would pull the whole fused app into
-   GPL-3.0 on distribution.
-3. **Weight.** It pulls aiohttp, beautifulsoup4, pillow, tqdm, requests and
-   mkdocstrings for what is one HTTP GET here.
-
-What it *was* useful for: its `MarketRegion` enum confirmed the region slugs used
-in `REGION_MAP` (na/eu/sea/mena/kr/ru/jp/th/tw/sa/console_*), and its `ApiVersion`
-enum (v1/v2) confirmed the versioned path shape. Both now feed the candidate list
-in `server/app.py` -> `ARSHA_CANDIDATES`.
-
 
 ## Price sources
 
-Two sources were removed on purpose:
+The active source is **bdolytics.com**, an undocumented internal endpoint its own
+frontend calls (found by inspecting its network traffic). One request returns the
+entire market catalog, so pricing our ~250 tracked items costs a single call,
+cached 10 minutes rather than one request per item. Cleared directly with
+bdolytics's own owner/creator before shipping.
 
-- **arsha.io** - responds, but serves stale (2025-era) data. Stale prices are worse
-  than none: the solver optimises happily against them and returns a confidently
-  wrong empire.
-- **Pearl Abyss' own trade endpoint** - it works, but pricing ~250 items means ~250
-  requests per refresh straight at PA. That is the kind of traffic that gets an IP
-  or account flagged, and no price data is worth that risk.
+Several other sources were tried first and ruled out - see `CLAUDE.md` for the
+full trail, in short:
 
-That leaves **`blackdesertmarket`** (`api.blackdesertmarket.com`), which fronts the
-official market, plus **`custom`** if you want to point at your own endpoint.
+- **arsha.io** - reachable, but only serves items already warm in its own cache;
+  a fresh lookup for an ordinary material gets blocked by Pearl Abyss' own WAF.
+- **Official Pearl Abyss trade API, direct** - works, but pricing ~250 items
+  means ~250 requests per refresh straight at PA, which risks an IP or account
+  flag. Not worth the risk for price data.
+- **garmoth.com** - has real, current data, but sits behind a Cloudflare bot
+  challenge that blocks non-browser requests; getting past that is bot-detection
+  evasion, which this project won't do.
+- **blackdesertmarket** (`api.blackdesertmarket.com`) - was the source for a
+  while, but the service itself went down (confirmed unreachable from multiple
+  independent networks), not something a patch can fix.
 
-Because it is one request per item against a community-run service, the client is
-deliberately polite:
-
-- concurrency capped at 5,
-- backoff and retry on 429 / 5xx (a rate-limited item is retried, not dropped),
-- a 10-minute cache, so opening a page or reloading prices does not re-issue
-  hundreds of requests,
-- and **coverage is reported honestly**: the source line reads
-  `blackdesertmarket (248/248)`, or names the shortfall, e.g.
-  `(246/248) - 2 unpriced, valued at 0: 9492, 5205`.
-
-That last point matters. An item that fails to price is valued at **0** by the
-solver, which quietly distorts the result, so it is surfaced rather than swallowed.
-If you see a shortfall, reload once the cache expires; transient rate limiting
-usually clears.
+**Coverage is reported honestly** either way: the source line reads
+`bdolytics (248/248)`, or names the shortfall, e.g.
+`(246/248) - 2 unpriced, valued at 0: 9492, 5205`. An item that fails to price is
+valued at **0** by the solver, which quietly distorts the result if swallowed, so
+it's surfaced instead. Client-side, prices refresh automatically before each
+optimize run only when they're more than 10 minutes stale, instead of on every
+single run.
 
 ### Why the server log is not enough
 
@@ -251,7 +242,7 @@ response. Coverage is therefore reported separately:
 ## Watching a solve
 
 Solves run in the background and can take minutes to over an hour, so the server's
-progress output is streamed into the panel's Activity log as well as the console:
+progress output is streamed into the Activity log as well as the console:
 
 ```
 Generating node weighted directed graph...
@@ -264,6 +255,10 @@ Both `print` output and bdo-empire's loguru messages are captured per job (logur
 needs its own sink because it binds to the original stderr at import). HiGHS itself
 logs from C++ below Python's streams, so its iteration output stays in the console;
 the stage messages above are what appear in the panel.
+
+The job runs independently of any browser connection - navigate away and back
+and the Activity log picks up exactly where it left off, backed by the server's
+`GET /api/optimize/{job_id}?since=N` incremental log endpoint.
 
 **Stop** remains available throughout and keeps the best solution found so far.
 
@@ -322,3 +317,14 @@ Fixes:
 
 Dropped prices still mean those items are valued at 0, so treat a non-zero count as
 a signal to reload prices, not as noise.
+
+## Performance
+
+- **Gzip compression** on every response (`server/app.py`). The map's JS bundle
+  and its two largest data files (`loc.json`, `all_lodging_storage.json`) were
+  being served completely uncompressed - together roughly 7.4 MB uncompressed
+  down to about 1.1 MB gzipped.
+- **Route-level code-splitting.** Every secondary page (Optimize, Workers,
+  Plantzones, Settings, Workshops, ...) is a separately-fetched chunk, loaded
+  only when you visit it, rather than all bundled into the page everyone loads
+  first. Cuts the main bundle from ~2.3 MB to ~1.5 MB before compression.

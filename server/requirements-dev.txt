@@ -1,0 +1,3 @@
+# Only needed to run server/tests/. Kept separate from requirements.txt so a
+# normal install/run doesn't pull in a test framework.
+pytest>=8.0

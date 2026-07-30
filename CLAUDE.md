@@ -155,12 +155,17 @@ than using `!important`.
 ## Verified vs unverified
 
 Verified: the map builds and serves; the router passes against the real 929-node
-graph; effective-price maths matches upstream semantics; job progress streams;
-provider fallback, caching and retry all covered by tests with mocked servers.
+graph; effective-price maths matches upstream semantics and has a real test suite
+(`server/tests/`, run with `pytest` after `pip install -r requirements-dev.txt`);
+job progress streams and survives page navigation; `fetch_prices()`'s dispatcher
+(named provider, auto-chain, custom-URL validation) and `fetch_bdolytics()`
+(region mapping, caching, coverage reporting) are covered by tests with a mocked
+HTTP transport, not real network calls.
 
-Unverified from the dev sandbox: live calls to `api.blackdesertmarket.com` (the
-sandbox blocks it). Coverage is therefore reported at runtime, check
-`/api/price-status` after a reload rather than assuming.
+What the mocked tests *can't* catch: bdolytics.com itself going down or changing
+response shape. That only shows up live - check `/api/price-status` after a
+reload rather than assuming, and see gotcha #4 above for the full evaluation
+trail if it ever needs re-doing.
 
 ## Conventions
 
