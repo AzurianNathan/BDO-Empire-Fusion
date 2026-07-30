@@ -73,18 +73,34 @@ misnamed, FastAPI cannot resolve the annotation, silently treats the parameter a
 This bit twice. If an endpoint suddenly 422s on a body it used to accept, check the
 model class still exists before anything else.
 
-### 2. The node router must return Numbers, not strings
+### 2. The node router: real WASM now, but a validating adapter in front of it
 
 `patches/noderouter.js` replaces `pkg/noderouter.js`, a wasm-pack module upstream
-imports but does not ship. It is plain JS; nothing requires it to be WASM.
+imports but does not ship. It solves a node-weighted Steiner forest (connect each
+terminal to its town, paying each node's CP once), which is NP-hard - `99999` as a
+destination means "any base town".
+
+It used to be a hand-written pure-JS heuristic (no WASM toolchain needed to build).
+As of the router-swap, it wraps a real vendored WASM build of
+[Thell/bdo-noderouter](https://github.com/Thell/bdo-noderouter) (Unlicense; a
+published Node-Weighted Primal-Dual approximation, not a guess) - see
+`patches/pkg-real/`. Rebuild it from source with:
+`wasm-pack build --release --target web --features wasm` in a clone of that repo,
+then copy `pkg/noderouter.js` and `pkg/noderouter_bg.wasm` into `patches/pkg-real/`.
+
+**Why the adapter exists, not just the raw WASM module:** confirmed by building it
+and running it against a real user's empire export whose plantzone keys had
+drifted from current game data - the real WASM build **panics (aborts the whole
+instance, unrecoverable) on any terminal/root key the graph doesn't know about**.
+That's Thell's deliberate design ("fail loud, the caller validates input"), not a
+bug he owes a fix for. `patches/noderouter.js` is where that validation has to
+live: it filters every pair against the known node set before ever calling into
+the WASM. **Do not remove that filtering** - it is the only thing standing between
+a stale saved empire and a crashed router.
 
 `game.js` does `new Set(filteredNodes)` and tests membership against `link_list`
-entries, which are **Numbers**. Returning string keys breaks routing silently while
-looking correct. `tests/router_test.mjs` asserts this.
-
-It solves a node-weighted Steiner forest (connect each terminal to its town, paying
-each node's CP once), which is NP-hard, so it is a heuristic, as is upstream's.
-`99999` as a town means "any base town".
+entries, which are **Numbers**. `tests/router_test.mjs` asserts this still holds
+(the adapter is the layer responsible for it, not the vendored WASM).
 
 ### 3. Unpriced items poison crafted prices and used to block solves entirely
 

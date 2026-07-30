@@ -15,6 +15,8 @@ Verified-exact edits (fail loudly if upstream changes):
   10. copy StorehouseView.vue into src/views/
   11. copy SaveEmpireButton.vue into src/components/, register it globally,
       and render it in the nav bar
+  12. install src/pkg/noderouter.js (adapter) + noderouter_real.js/.wasm
+      (vendored Thell/bdo-noderouter build), only if no real pkg/ exists yet
 """
 import shutil
 import sys
@@ -108,9 +110,13 @@ def main() -> None:
     )
 
     # The node router: workermanjs imports `../pkg/noderouter.js`, a compiled
-    # WASM module shrddr does not publish. Because that import is a JS wrapper,
-    # a pure-JS module with the same surface drops straight in. Only installed
-    # if the real one isn't already present, so a genuine pkg/ always wins.
+    # WASM module shrddr does not publish. `patches/noderouter.js` is a thin
+    # adapter (validates terminal pairs, exposes the .n/.townIndices props
+    # tests/router_test.mjs reads) around a real vendored WASM build of
+    # Thell/bdo-noderouter's published Steiner Forest approximation
+    # (patches/pkg-real/, built via `wasm-pack build --release --target web
+    # --features wasm` - see that repo to rebuild). Only installed if a real
+    # pkg/ isn't already present, so a genuine one a user places there wins.
     # `src/stores/game.js` imports '../pkg/noderouter.js', so it resolves to src/pkg/.
     pkg_dir = ROOT / "src" / "pkg"
     pkg_dir.mkdir(exist_ok=True)
@@ -119,7 +125,9 @@ def main() -> None:
         print("  = pkg/noderouter.js already present, leaving it alone")
     else:
         shutil.copy(PATCH_DIR / "noderouter.js", router)
-        print("  + installed pure-JS pkg/noderouter.js (no WASM toolchain needed)")
+        shutil.copy(PATCH_DIR / "pkg-real" / "noderouter.js", pkg_dir / "noderouter_real.js")
+        shutil.copy(PATCH_DIR / "pkg-real" / "noderouter_bg.wasm", pkg_dir / "noderouter_bg.wasm")
+        print("  + installed pkg/noderouter.js (bdo-noderouter WASM build + validating adapter)")
 
     router = ROOT / "src/router/index.js"
     # Route-level code-splitting: our own routes are lazy from the start

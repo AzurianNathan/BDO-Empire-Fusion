@@ -22,12 +22,20 @@ _cache: dict[str, Any] = {}
 
 def load_static_json(name: str) -> Any:
     """Load and cache server/static/data/<name>. Returns {} if the file
-    doesn't exist yet (without caching the failure)."""
+    doesn't exist yet (without caching the failure, so a later call retries).
+
+    Prints a warning on a miss rather than failing silently: a missing file
+    degrades whatever calls this (e.g. _tnk_to_town_name()'s reserved-bed
+    accounting going quietly empty) with no other visible symptom, so this is
+    the only place that can flag it.
+    """
     if name in _cache:
         return _cache[name]
     try:
         data = json.loads((STATIC_DATA / name).read_text(encoding="utf-8"))
     except FileNotFoundError:
+        print(f"WARNING: {STATIC_DATA / name} not found; run build.py to populate server/static/data. "
+              f"Anything depending on {name} will silently see no data until this exists.")
         return {}
     _cache[name] = data
     return data

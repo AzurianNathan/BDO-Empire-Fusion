@@ -5,7 +5,11 @@ const nodesLinks = JSON.parse(fs.readFileSync('./nodes_links.json'))
 const expl = JSON.parse(fs.readFileSync('./exploration.json'))
 const pzs = JSON.parse(fs.readFileSync('./plantzone.json'))
 
-await init()
+// Node's fetch() doesn't support file:// URLs (a browser's does), and this
+// script runs standalone via `node`, not through Vite - so the wasm bytes
+// have to be read and passed explicitly rather than relying on init()'s
+// default same-directory fetch.
+await init({ module_or_path: fs.readFileSync('./noderouter_bg.wasm') })
 const router = new WasmNodeRouter(nodesLinks)
 console.log('graph: nodes=', router.n, 'towns=', router.townIndices.length)
 
