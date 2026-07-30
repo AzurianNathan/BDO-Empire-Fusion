@@ -60,6 +60,22 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
+@app.middleware("http")
+async def _cache_hashed_assets(request, call_next):
+    """StaticFiles sends ETag/Last-Modified but no Cache-Control, so every
+    repeat visit revalidates instead of loading from disk cache. /assets/* is
+    Vite's build output - each filename is content-hashed
+    (index.<hash>.js), so any real change gets a new URL. That makes it safe
+    to cache for a year; /data/* and index.html are NOT hash-versioned (they
+    can change without a URL change, e.g. re-running build.py), so they're
+    deliberately left alone here.
+    """
+    response = await call_next(request)
+    if request.url.path.startswith("/assets/"):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return response
+
+
 # --- data files ---------------------------------------------------------------
 
 def _load_json(name: str) -> Any:
