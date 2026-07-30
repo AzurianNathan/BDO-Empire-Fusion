@@ -1,0 +1,13 @@
+workermanjs/
+server/.venv/
+server/static/
+.venv/
+node_modules/
+dist/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.git/
+.github/
+.idea/
+.vscode/

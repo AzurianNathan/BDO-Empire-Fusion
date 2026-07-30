@@ -19,6 +19,7 @@ the patches locally, and installs bdo-empire from PyPI.
 ```
 build.py / build.bat      one-time setup (clone, patch, build, install)
 run.sh / run.bat / run.ps1    start the local server
+Dockerfile / docker-compose.yml   alternative: build/run without installing Python or Node
 server/
   app.py                  FastAPI: serves the map, prices, optimizer jobs
   pipeline.py             headless driver around bdo-empire's solver
@@ -93,6 +94,27 @@ Then open http://127.0.0.1:8000/ and use **Optimize** or **Workers** in the top 
 `python build.py --backend` sets up only the backend (skips the map build).
 The backend is always set up first and independently, so `run` works even if the
 map build can't complete.
+
+## Or with Docker
+
+No need to install Python or Node.js yourself - the image builds them in:
+
+```
+docker compose up --build
+```
+
+or without compose:
+
+```
+docker build -t bdo-empire-fusion .
+docker run -p 8000:8000 bdo-empire-fusion
+```
+
+Then open http://127.0.0.1:8000/ same as above. The image is a two-stage build:
+the first stage clones and patches workermanjs fresh (same as `build.py` does
+locally - nothing upstream is vendored into the image either) and builds the
+map; the second stage is just the Python backend and the built map, with no
+Node.js or git in the final image.
 
 ## Two ways to run
 
