@@ -2,6 +2,8 @@
 import { useUserStore } from '../stores/user'
 import { useMarketStore } from '../stores/market'
 import { useOptimizeJobStore } from '../stores/optimizeJob'
+import { useEmpireStorehouseStore } from '../stores/empireStorehouse'
+import ModalDialog from '../components/ModalDialog.vue'
 
 const DEFAULT_SOLVER = {
   mip_rel_gap: 0.0001,
@@ -31,7 +33,11 @@ export default {
       userStore: useUserStore(),
       marketStore: useMarketStore(),
       jobStore: useOptimizeJobStore(),
+      empireStorehouse: useEmpireStorehouseStore(),
     }
+  },
+  components: {
+    ModalDialog,
   },
   data() {
     return {
@@ -42,6 +48,10 @@ export default {
       solver: { ...DEFAULT_SOLVER },
       priceLoading: false,
       priceStatus: null,
+      saveDialogVisible: false,
+      saveName: '',
+      saveNotes: '',
+      saving: false,
     }
   },
   computed: {
@@ -62,8 +72,10 @@ export default {
       const got = this.priceCount
       return got && got < this.priceStatus.expected ? this.priceStatus.expected - got : 0
     },
+    // userStore.allJobsDailyProfitPerCp already computes this exact ratio -
+    // reuse it instead of re-deriving value/cpUsed a third time in the app.
     profitPerCp() {
-      return this.cpUsed ? this.value / this.cpUsed : 0
+      return this.userStore.allJobsDailyProfitPerCp || 0
     },
   },
   async mounted() {
@@ -168,6 +180,22 @@ export default {
     resetSolver() {
       this.solver = { ...DEFAULT_SOLVER }
     },
+    openSaveDialog() {
+      this.saveName = `${this.budget} CP - ${this.region}`
+      this.saveNotes = ''
+      this.saveDialogVisible = true
+    },
+    async confirmSave() {
+      if (!this.saveName) return
+      this.saving = true
+      try {
+        await this.empireStorehouse.save(this.saveName, this.saveNotes)
+        this.saveDialogVisible = false
+        this.addLog(`Saved to storehouse: "${this.saveName}"`)
+      } finally {
+        this.saving = false
+      }
+    },
     jobLabel() {
       if (!this.jobStore.status) return 'Idle'
       return {
@@ -205,7 +233,25 @@ export default {
         <div class="eo-tile"><div class="eo-tile-v num">{{ workers ? fmt(workers) : '\u2014' }}</div><div class="eo-tile-l">Workers</div></div>
         <div class="eo-tile"><div class="eo-tile-v num">{{ profitPerCp ? fmt(profitPerCp) : '\u2014' }}</div><div class="eo-tile-l">Silver / CP</div></div>
       </div>
+      <button class="eo-btn" :disabled="!workers" @click="openSaveDialog">Save to storehouse</button>
     </div>
+
+    <ModalDialog v-model:show="saveDialogVisible">
+      <h3>Save empire</h3>
+      <div class="eo-field">
+        <label>Name</label>
+        <input type="text" v-model="saveName" />
+      </div>
+      <div class="eo-field">
+        <label>Notes</label>
+        <input type="text" v-model="saveNotes" placeholder="optional" />
+      </div>
+      <div class="eo-actions">
+        <button class="eo-btn primary" :disabled="!saveName || saving" @click="confirmSave">
+          {{ saving ? 'Saving...' : 'Save' }}
+        </button>
+      </div>
+    </ModalDialog>
 
     <nav class="eo-tabs">
       <button v-for="t in [['optimize','Optimize'],['solver','Solver'],['prices','Prices'],['guide','Guide']]"

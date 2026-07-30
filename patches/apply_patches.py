@@ -6,11 +6,13 @@ Verified-exact edits (fail loudly if upstream changes):
   1. src/stores/market.js  - price fetch      -> local /api/prices
   2. src/stores/user.js    - marketUrl getter -> local /api/prices
   3. vite.config.js        - base '/workerman/' -> '/'
-  4. src/router/index.js   - import + register the /optimize and /workers routes
-  5. src/App.vue           - add the Optimize and Workers nav links
+  4. src/router/index.js   - import + register the /optimize, /workers, /storehouse routes
+  5. src/App.vue           - add the Optimize, Workers, and Storehouse nav links
   6. copy OptimizeView.vue into src/views/
   7. copy optimizeJob.js into src/stores/
   8. copy WorkersView.vue into src/views/
+  9. copy empireStorehouse.js into src/stores/
+  10. copy StorehouseView.vue into src/views/
 """
 import shutil
 import sys
@@ -67,6 +69,12 @@ def main() -> None:
     shutil.copy(PATCH_DIR / "WorkersView.vue", ROOT / "src/views/WorkersView.vue")
     print("  + copied WorkersView.vue into src/views/")
 
+    shutil.copy(PATCH_DIR / "empireStorehouse.js", ROOT / "src/stores/empireStorehouse.js")
+    print("  + copied empireStorehouse.js into src/stores/")
+
+    shutil.copy(PATCH_DIR / "StorehouseView.vue", ROOT / "src/views/StorehouseView.vue")
+    print("  + copied StorehouseView.vue into src/views/")
+
     # Global Empire Optimizer theme, imported after Workerman's own main.css so
     # it wins on equal specificity.
     shutil.copy(PATCH_DIR / "theme.css", ROOT / "src/assets/theme.css")
@@ -111,6 +119,13 @@ def main() -> None:
         '    {\n      path: "/optimize",\n      name: "optimize",\n      component: () => import("../views/OptimizeView.vue"),\n    },\n'
         '    {\n      path: "/workers",\n      name: "workers",\n      component: () => import("../views/WorkersView.vue"),\n    },',
         marker='path: "/workers"',
+    )
+    edit(
+        router,
+        '    {\n      path: "/workers",\n      name: "workers",\n      component: () => import("../views/WorkersView.vue"),\n    },',
+        '    {\n      path: "/workers",\n      name: "workers",\n      component: () => import("../views/WorkersView.vue"),\n    },\n'
+        '    {\n      path: "/storehouse",\n      name: "storehouse",\n      component: () => import("../views/StorehouseView.vue"),\n    },',
+        marker='path: "/storehouse"',
     )
     # Same code-splitting for upstream's own secondary routes: they're all
     # statically imported today, which bundles every view (plantzones,
@@ -157,6 +172,12 @@ def main() -> None:
         '<RouterLink to="/optimize">Optimize</RouterLink>',
         '<RouterLink to="/optimize">Optimize</RouterLink>\n        <RouterLink to="/workers">Workers</RouterLink>',
         marker='to="/workers"',
+    )
+    edit(
+        ROOT / "src/App.vue",
+        '<RouterLink to="/workers">Workers</RouterLink>',
+        '<RouterLink to="/workers">Workers</RouterLink>\n        <RouterLink to="/storehouse">Storehouse</RouterLink>',
+        marker='to="/storehouse"',
     )
     print("Done.")
 

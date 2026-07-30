@@ -10,6 +10,10 @@ fallback control panel. Either way it exposes:
   POST /api/optimize                          -> {"job_id"}
   GET  /api/optimize/{job_id}                 -> status / result
   POST /api/optimize/{job_id}/stop
+  POST /api/empires                           -> save a solved/current empire
+  GET  /api/empires                           -> list saved empires (no payload)
+  GET  /api/empires/{empire_id}               -> one saved empire, full payload
+  DELETE /api/empires/{empire_id}
 """
 from __future__ import annotations
 
@@ -18,6 +22,7 @@ import json
 import math
 import sys
 from collections import deque
+from datetime import datetime, UTC
 import threading
 import time
 import traceback
@@ -624,6 +629,74 @@ async def optimize_stop(job_id: str) -> dict[str, str]:
     job.status = "stopping"
     job.controller.stop()
     return {"status": "stopping"}
+
+
+# --- empire storehouse ----------------------------------------------------------
+
+class EmpireSnapshot(BaseModel):
+    """One saved empire. `empire` holds the empire-specific userStore fields
+    (userWorkers, lodgingP2W, etc. - see docs/empire-storehouse-plan.md for the
+    full classification); `meta` holds display-only summary numbers computed
+    client-side at save time (valuePerDay, cpUsed, efficiency, region,
+    workerCount) so the list endpoint can be cheap without recomputing them."""
+    name: str
+    notes: str = ""
+    empire: dict[str, Any]
+    meta: dict[str, Any]
+
+
+EMPIRES_FILE = HERE / "empires.json"
+
+
+def _load_empires() -> list[dict[str, Any]]:
+    try:
+        return json.loads(EMPIRES_FILE.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+
+
+def _save_empires(empires: list[dict[str, Any]]) -> None:
+    EMPIRES_FILE.write_text(json.dumps(empires), encoding="utf-8")
+
+
+@app.post("/api/empires")
+async def save_empire(req: EmpireSnapshot) -> dict[str, str]:
+    empires = _load_empires()
+    empire_id = uuid.uuid4().hex
+    empires.append({
+        "id": empire_id,
+        "name": req.name,
+        "notes": req.notes,
+        "savedAt": datetime.now(UTC).isoformat(),
+        "meta": req.meta,
+        "empire": req.empire,
+    })
+    _save_empires(empires)
+    return {"id": empire_id}
+
+
+@app.get("/api/empires")
+async def list_empires() -> list[dict[str, Any]]:
+    return [{"id": e["id"], "name": e["name"], "notes": e.get("notes", ""),
+             "savedAt": e["savedAt"], "meta": e["meta"]} for e in _load_empires()]
+
+
+@app.get("/api/empires/{empire_id}")
+async def get_empire(empire_id: str) -> dict[str, Any]:
+    for e in _load_empires():
+        if e["id"] == empire_id:
+            return e
+    raise HTTPException(404, "unknown empire")
+
+
+@app.delete("/api/empires/{empire_id}")
+async def delete_empire(empire_id: str) -> dict[str, str]:
+    empires = _load_empires()
+    remaining = [e for e in empires if e["id"] != empire_id]
+    if len(remaining) == len(empires):
+        raise HTTPException(404, "unknown empire")
+    _save_empires(remaining)
+    return {"status": "deleted"}
 
 
 PROVIDERS = {

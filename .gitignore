@@ -18,6 +18,9 @@ __pycache__/
 .env
 *.local
 
+# Per-user saved empires (empire storehouse) - local state, not shared across clones
+server/empires.json
+
 # OS / editor noise
 .DS_Store
 Thumbs.db
