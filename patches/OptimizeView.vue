@@ -45,6 +45,7 @@ export default {
       connected: null,
       budget: 500,
       extend: false,
+      matchAvailable: false,
       solver: { ...DEFAULT_SOLVER },
       priceLoading: false,
       priceStatus: null,
@@ -171,6 +172,7 @@ export default {
         modifiers: this.userStore.regionResources,
         baseEmpire: this.baseEmpire(),
         solverOverrides: this.solverPayload(),
+        matchAvailableWorkers: this.extend && this.matchAvailable,
       }
       await this.jobStore.start(body)
     },
@@ -273,6 +275,15 @@ export default {
             <input type="number" min="1" v-model="budget" />
           </div>
           <label class="eo-check"><input type="checkbox" v-model="extend" /> Extend current empire</label>
+          <label v-if="extend" class="eo-check eo-check-nested">
+            <input type="checkbox" v-model="matchAvailable" />
+            Match available workers to new slots
+          </label>
+          <p v-if="extend" class="eo-note eo-check-nested">
+            Fills newly-picked plantzone slots with your own idle workers of the same
+            town and type where one is available, instead of a fresh hire. Doesn't
+            change which plantzones get picked or the profit shown.
+          </p>
           <div class="eo-actions">
             <button v-if="!solving" class="eo-btn primary" @click="optimize">Optimize</button>
             <button v-else class="eo-btn danger" @click="stop">Stop</button>
@@ -409,6 +420,8 @@ export default {
 .eo-root input:focus,.eo-root select:focus{outline:none;border-color:var(--brass)}
 .eo-check{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px;margin:4px 0 14px;cursor:pointer}
 .eo-check input{min-width:auto}
+.eo-check-nested{margin-left:22px}
+label.eo-check-nested{margin:-6px 0 6px}
 .eo-actions{display:flex;gap:10px;flex-wrap:wrap}
 .eo-btn{background:var(--panel2);color:var(--parch);border:1px solid var(--line);border-radius:9px;padding:9px 16px;font-size:14px;cursor:pointer;font-family:inherit}
 .eo-btn:hover:not(:disabled){border-color:var(--brass)}

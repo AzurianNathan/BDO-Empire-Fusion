@@ -13,6 +13,8 @@ Verified-exact edits (fail loudly if upstream changes):
   8. copy WorkersView.vue into src/views/
   9. copy empireStorehouse.js into src/stores/
   10. copy StorehouseView.vue into src/views/
+  11. copy SaveEmpireButton.vue into src/components/, register it globally,
+      and render it in the nav bar
 """
 import shutil
 import sys
@@ -74,6 +76,25 @@ def main() -> None:
 
     shutil.copy(PATCH_DIR / "StorehouseView.vue", ROOT / "src/views/StorehouseView.vue")
     print("  + copied StorehouseView.vue into src/views/")
+
+    shutil.copy(PATCH_DIR / "SaveEmpireButton.vue", ROOT / "src/components/SaveEmpireButton.vue")
+    print("  + copied SaveEmpireButton.vue into src/components/")
+    # Registered globally (rather than in App.vue's own <script setup>) so
+    # App.vue's script section - upstream's own root component logic - never
+    # needs editing; only its template gets one more anchored line below.
+    edit(
+        ROOT / "src/main.js",
+        'import App from "./App.vue";',
+        'import App from "./App.vue";\n'
+        'import SaveEmpireButton from "./components/SaveEmpireButton.vue";',
+        marker='import SaveEmpireButton',
+    )
+    edit(
+        ROOT / "src/main.js",
+        "const app = createApp(App);",
+        'const app = createApp(App);\napp.component("SaveEmpireButton", SaveEmpireButton);',
+        marker='app.component("SaveEmpireButton"',
+    )
 
     # Global Empire Optimizer theme, imported after Workerman's own main.css so
     # it wins on equal specificity.
@@ -178,6 +199,15 @@ def main() -> None:
         '<RouterLink to="/workers">Workers</RouterLink>',
         '<RouterLink to="/workers">Workers</RouterLink>\n        <RouterLink to="/storehouse">Storehouse</RouterLink>',
         marker='to="/storehouse"',
+    )
+    # Always-visible safeguard: lets the current empire be snapshotted from
+    # any page before something overwrites it (an Optimize run, an import),
+    # not only after a solve like OptimizeView.vue's own save button.
+    edit(
+        ROOT / "src/App.vue",
+        '<RouterLink to="/storehouse">Storehouse</RouterLink>',
+        '<RouterLink to="/storehouse">Storehouse</RouterLink>\n        <SaveEmpireButton />',
+        marker='<SaveEmpireButton',
     )
     print("Done.")
 

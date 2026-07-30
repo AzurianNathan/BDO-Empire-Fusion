@@ -44,7 +44,18 @@ browser ── Workerman map (patched) ──┐
 - `server/app.py` - everything HTTP: static hosting, prices, jobs, progress capture.
 - `server/pipeline.py` - headless driver around bdo-empire's solver. Constants here
   (budget search depth, solver tolerances, lodging table) are copied from upstream
-  `bdo_empire/main.py`. **Re-check them when bumping bdo-empire.**
+  `bdo_empire/main.py`. **Re-check them when bumping bdo-empire.** So does
+  `_split_base_empire`'s worker-classification condition, which mirrors
+  `bdo_empire.api_common.extract_base_empire()`'s own undocumented job-shape
+  parsing rule rather than a copied constant, and `_match_available_workers`,
+  the opt-in post-hoc substitution of real idle workers into newly-solved
+  slots (`docs/optimizer-feature-proposals.md` item 2) - re-check both against
+  `api_common.py` on a bump too.
+- `server/jsondata.py` - tiny cached loader for `server/static/data/*.json`,
+  shared by `app.py` and `pipeline.py` so the multi-MB `loc.json` is only ever
+  parsed once per process. A separate module because `app.py` imports
+  `pipeline.run_optimization` at module load, so `pipeline` importing from
+  `app.py` would be circular.
 - `patches/apply_patches.py` - rewrites a clean workermanjs checkout. Every edit is
   anchored on an exact string and fails loudly if upstream changed.
 - `patches/noderouter.js` - see below, this one matters.

@@ -13,9 +13,7 @@ re-check them against upstream main.py.
 from __future__ import annotations
 
 import copy
-import json
 from math import inf
-from pathlib import Path
 from typing import Any, Callable, Optional
 
 from bdo_empire.api_common import FARMING_WORKER_SILVER_PER_DAY_KEY
@@ -25,8 +23,7 @@ from bdo_empire.optimize_highspy import optimize as optimize_highspy
 from bdo_empire.solver_highspy import SolverController
 from bdo_empire.generate_workerman_data import generate_workerman_data
 
-HERE = Path(__file__).resolve().parent
-_STATIC_DATA = HERE / "static" / "data"
+import jsondata
 
 # --- constants copied from bdo_empire/main.py ---------------------------------
 
@@ -73,6 +70,22 @@ def default_lodging_specifications() -> dict[str, dict[str, int]]:
     }
 
 
+def _normalize_lodging_specs(lodging: Optional[dict]) -> dict[str, dict[str, int]]:
+    """Merge a caller-supplied `lodging` (OptimizeRequest.lodging is an
+    unvalidated Optional[dict]) over the full default table, town by town and
+    field by field, rather than trusting its shape. A caller sending a partial
+    town or one missing a field (e.g. {"Velia": {"bonus": 2}}) would otherwise
+    either silently drop reserved-bed accounting for towns it omits, or raise
+    KeyError on `["reserved"] +=` for a town missing that field."""
+    specs = default_lodging_specifications()
+    if not lodging:
+        return specs
+    for town, spec in lodging.items():
+        if town in specs and isinstance(spec, dict):
+            specs[town] = {**specs[town], **spec}
+    return specs
+
+
 # --- base-empire worker carry-forward -------------------------------------------
 # bdo-empire's own extract_base_empire() only understands active plantzone-job
 # workers (it pins their (plantzone, town) as a solved constraint) and either
@@ -86,6 +99,14 @@ def default_lodging_specifications() -> dict[str, dict[str, int]]:
 # bdo-empire can't handle are kept out of what it's given and reattached to the
 # result unchanged, with their occupied lodging folded into the town's
 # `reserved` count so the solver's own capacity accounting still reflects them.
+#
+# `_split_base_empire`'s classification condition mirrors extract_base_empire's
+# own undocumented parsing rule (a dict job with a `pzk` key is pinnable,
+# anything else is skipped/errored) rather than an official copied constant, so
+# it carries the same "re-check on bump" risk as OPTIMIZE_CONFIG/SOLVER_CONFIG
+# above: if a bdo-empire version bump changes what extract_base_empire() accepts,
+# this condition goes stale silently. Re-check it against api_common.py's
+# extract_base_empire() whenever bdo-empire is bumped, same as the constants.
 
 _tnk_to_town_name_cache: Optional[dict[int, str]] = None
 
@@ -97,16 +118,16 @@ def _tnk_to_town_name() -> dict[int, str]:
     tnk -> tk; loc.json's en.town gives tk -> name) since `tnk` is a
     Workerman-domain concept, not something bdo-empire's own reference data
     indexes. Loaded once and cached; these files only change via a rebuild,
-    which requires a server restart anyway."""
+    which requires a server restart anyway. Not cached on failure (e.g. server
+    started before build.py finished populating server/static/data), so a
+    later call can retry once the files exist."""
     global _tnk_to_town_name_cache
     if _tnk_to_town_name_cache is not None:
         return _tnk_to_town_name_cache
-    try:
-        regioninfo = json.loads((_STATIC_DATA / "regioninfo.json").read_text(encoding="utf-8"))
-        town_names = json.loads((_STATIC_DATA / "loc.json").read_text(encoding="utf-8"))["en"]["town"]
-    except FileNotFoundError:
-        _tnk_to_town_name_cache = {}
-        return _tnk_to_town_name_cache
+    regioninfo = jsondata.load_static_json("regioninfo.json")
+    town_names = jsondata.load_static_json("loc.json").get("en", {}).get("town", {})
+    if not regioninfo or not town_names:
+        return {}
     mapping: dict[int, str] = {}
     for info in regioninfo.values():
         tnk = info.get("waypoint", 0)
@@ -118,20 +139,41 @@ def _tnk_to_town_name() -> dict[int, str]:
     return mapping
 
 
+def _normalize_worker_job(worker: dict) -> dict:
+    """Normalize the legacy pre-migration job shape (a bare plantzone id
+    number, per Workerman's own jobIsPz()/migrate() in src/stores/game.js and
+    user.js) into the {kind, pzk, storage} dict shape both bdo-empire and the
+    rest of this module expect. The live Vue UI always runs userStore.migrate()
+    before a solve is reachable, so this only matters for a direct API caller
+    or an unmigrated snapshot - but base_empire has no schema enforcing it, so
+    without this a legacy-shaped worker silently loses its solver pin instead
+    of being recognized as an active plantzone job."""
+    job = worker.get("job")
+    if isinstance(job, (int, float)) and not isinstance(job, bool):
+        return {**worker, "job": {"kind": "plantzone", "pzk": int(job), "storage": worker.get("tnk")}}
+    return worker
+
+
 def _split_base_empire(
     base_empire: Optional[dict],
 ) -> tuple[Optional[dict], list[dict], dict[str, int]]:
     """Split base_empire's userWorkers into what bdo-empire can pin (active
     plantzone jobs) vs everything else, which it silently drops or errors on
     today. Returns (solver_base_empire, carry_forward_workers, reserved_beds)."""
-    if not base_empire or not base_empire.get("userWorkers"):
+    if not base_empire:
         return base_empire, [], {}
+    if not base_empire.get("userWorkers"):
+        # A truthy base_empire lacking "userWorkers" entirely (as opposed to an
+        # empty list) would otherwise reach bdo_empire's extract_base_empire(),
+        # which does an unguarded base_empire["userWorkers"] and KeyErrors.
+        return {**base_empire, "userWorkers": []}, [], {}
 
     tnk_to_name = _tnk_to_town_name()
     plantzone_workers: list[dict] = []
     carry_forward: list[dict] = []
     reserved_beds: dict[str, int] = {}
-    for worker in base_empire["userWorkers"]:
+    for raw_worker in base_empire["userWorkers"]:
+        worker = _normalize_worker_job(raw_worker)
         job = worker.get("job")
         if isinstance(job, dict) and job.get("kind") == "plantzone" and job.get("pzk") is not None:
             plantzone_workers.append(worker)
@@ -143,6 +185,48 @@ def _split_base_empire(
 
     solver_base_empire = {**base_empire, "userWorkers": plantzone_workers}
     return solver_base_empire, carry_forward, reserved_beds
+
+
+# --- available-workers post-hoc matching -----------------------------------------
+# See docs/optimizer-feature-proposals.md item 2. The solver's objective is
+# built entirely from an idealized median-worker profile per (plantzone,
+# region); base_empire only pins topology, never reaches the objective. So
+# once the solver has decided which (terminal, root) slots to fill, this
+# substitutes a real idle carry-forward worker's stats into an already-decided
+# slot when one of the exact same town + archetype (tnk, charkey) is
+# available. It deliberately does NOT change which nodes were picked, the
+# lodging/capacity accounting, or the profit calculation - only which worker
+# (real vs. synthesized median) is shown filling that slot. Matching on exact
+# (tnk, charkey) rather than a looser "same species" notion is a deliberate
+# simplification: charkey already encodes a per-region worker archetype (see
+# bdo_empire's region_workers.json / makeMedianChar()), so an idle worker's
+# charkey only ever equals a solved slot's charkey when they're genuinely
+# interchangeable, without needing to load bdo-empire's internal worker-type
+# tables here.
+
+_WORKER_PROFILE_FIELDS = ("label", "level", "wspdSheet", "mspdSheet", "luckSheet", "skills")
+
+
+def _match_available_workers(
+    solved_workers: list[dict],
+    available_workers: list[dict],
+) -> tuple[list[dict], list[dict]]:
+    """Returns (solved_workers_with_substitutions, leftover_available_workers)."""
+    pool: dict[tuple, list[dict]] = {}
+    for worker in available_workers:
+        pool.setdefault((worker.get("tnk"), worker.get("charkey")), []).append(worker)
+
+    matched: list[dict] = []
+    for slot in solved_workers:
+        bucket = pool.get((slot.get("tnk"), slot.get("charkey")))
+        if bucket:
+            real = bucket.pop()
+            matched.append({**slot, **{f: real[f] for f in _WORKER_PROFILE_FIELDS if f in real}})
+        else:
+            matched.append(slot)
+
+    leftover = [worker for bucket in pool.values() for worker in bucket]
+    return matched, leftover
 
 
 # --- the actual run -----------------------------------------------------------
@@ -157,6 +241,7 @@ def run_optimization(
     lodging: Optional[dict] = None,
     forced_taken: Optional[list[int]] = None,
     solver_overrides: Optional[dict] = None,
+    match_available_workers: bool = False,
     controller: Optional[SolverController] = None,
     on_start: Optional[Callable[[], None]] = None,
 ) -> dict:
@@ -166,6 +251,9 @@ def run_optimization(
     Workerman's price export ({"effectivePrices": ..., "farmingWorkerSilverPerDay": ...}).
     `modifiers` is Workerman's regionResources object (may be {}).
     `base_empire` is a Workerman empire export (or None to build from scratch).
+    `match_available_workers` opts into substituting real idle base-empire
+    workers into newly-solved slots where a compatible one is available - see
+    docs/optimizer-feature-proposals.md item 2 / `_match_available_workers`.
     """
     controller = controller or SolverController()
 
@@ -183,12 +271,10 @@ def run_optimization(
     modifiers = modifiers or {}
     solver_base_empire, carry_forward, reserved_beds = _split_base_empire(base_empire)
 
-    lodging_specs = lodging or default_lodging_specifications()
-    if reserved_beds:
-        lodging_specs = copy.deepcopy(lodging_specs)
-        for town, count in reserved_beds.items():
-            if town in lodging_specs:
-                lodging_specs[town]["reserved"] += count
+    lodging_specs = _normalize_lodging_specs(lodging)
+    for town, count in reserved_beds.items():
+        if town in lodging_specs:
+            lodging_specs[town]["reserved"] += count
     forced = forced_taken or []
 
     if on_start:
@@ -200,6 +286,16 @@ def run_optimization(
 
     highs_results = optimize_highspy(data, controller)
     workerman_json = generate_workerman_data(highs_results, lodging_specs, data)
+
+    if match_available_workers and carry_forward:
+        idle = [w for w in carry_forward if w.get("job") is None]
+        busy = [w for w in carry_forward if w.get("job") is not None]
+        matched_workers, leftover_idle = _match_available_workers(
+            workerman_json.get("userWorkers", []), idle
+        )
+        workerman_json["userWorkers"] = matched_workers
+        carry_forward = leftover_idle + busy
+
     if carry_forward:
         workerman_json["userWorkers"] = workerman_json.get("userWorkers", []) + carry_forward
     return workerman_json

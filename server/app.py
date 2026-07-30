@@ -42,6 +42,7 @@ from pydantic import BaseModel, field_validator
 
 from bdo_empire.solver_highspy import SolverController
 from pipeline import run_optimization
+import jsondata
 
 HERE = Path(__file__).resolve().parent
 STATIC_DIR = HERE / "static"
@@ -157,12 +158,16 @@ _NAME_CACHE: dict[str, dict[str, str]] = {}
 
 
 def item_names(lang: str = "en") -> dict[str, str]:
-    """Item id -> display name, from Workerman's loc.json."""
+    """Item id -> display name, from Workerman's loc.json.
+
+    Loaded via jsondata.load_static_json() rather than reading the file here
+    directly, so the multi-MB loc.json is shared with pipeline.py's own
+    _tnk_to_town_name() instead of being parsed twice.
+    """
     if lang in _NAME_CACHE:
         return _NAME_CACHE[lang]
-    try:
-        loc = json.loads((STATIC_DIR / "data" / "loc.json").read_text(encoding="utf-8"))
-    except FileNotFoundError:
+    loc = jsondata.load_static_json("loc.json")
+    if not loc:
         return {}
     names = loc.get(lang, loc.get("en", {})).get("item", {})
     _NAME_CACHE[lang] = names
@@ -471,6 +476,7 @@ class OptimizeRequest(BaseModel):
     lodging: Optional[dict] = None
     forcedTaken: Optional[list[int]] = None
     solverOverrides: Optional[dict] = None
+    matchAvailableWorkers: bool = False
 
     @field_validator("effectivePrices", mode="before")
     @classmethod
@@ -587,6 +593,7 @@ def _run_job(job_id: str, req: OptimizeRequest) -> None:
             lodging=req.lodging,
             forced_taken=req.forcedTaken,
             solver_overrides=req.solverOverrides,
+            match_available_workers=req.matchAvailableWorkers,
             controller=job.controller,
         )
         job.status = "stopped" if job.status == "stopping" else "done"
