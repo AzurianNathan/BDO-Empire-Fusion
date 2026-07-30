@@ -93,33 +93,48 @@ def main() -> None:
         print("  + installed pure-JS pkg/noderouter.js (no WASM toolchain needed)")
 
     router = ROOT / "src/router/index.js"
-    edit(
-        router,
-        'import HomeView from "../views/HomeView.vue";',
-        'import HomeView from "../views/HomeView.vue";\nimport OptimizeView from "../views/OptimizeView.vue";',
-        marker='import OptimizeView from "../views/OptimizeView.vue";',
-    )
-    edit(
-        router,
-        'import HomeView from "../views/HomeView.vue";\nimport OptimizeView from "../views/OptimizeView.vue";',
-        'import HomeView from "../views/HomeView.vue";\nimport OptimizeView from "../views/OptimizeView.vue";'
-        '\nimport WorkersView from "../views/WorkersView.vue";',
-        marker='import WorkersView from "../views/WorkersView.vue";',
-    )
+    # Route-level code-splitting: our own routes are lazy from the start
+    # (component: () => import(...) generates a separate chunk fetched only
+    # when the route is visited), the same pattern upstream already uses for
+    # /about. No static import needed since the identifier is never
+    # referenced outside its own dynamic import().
     edit(
         router,
         '    {\n      path: "/",\n      name: "home",\n      component: HomeView,\n    },',
         '    {\n      path: "/",\n      name: "home",\n      component: HomeView,\n    },\n'
-        '    {\n      path: "/optimize",\n      name: "optimize",\n      component: OptimizeView,\n    },',
+        '    {\n      path: "/optimize",\n      name: "optimize",\n      component: () => import("../views/OptimizeView.vue"),\n    },',
         marker='path: "/optimize"',
     )
     edit(
         router,
-        '    {\n      path: "/optimize",\n      name: "optimize",\n      component: OptimizeView,\n    },',
-        '    {\n      path: "/optimize",\n      name: "optimize",\n      component: OptimizeView,\n    },\n'
-        '    {\n      path: "/workers",\n      name: "workers",\n      component: WorkersView,\n    },',
+        '    {\n      path: "/optimize",\n      name: "optimize",\n      component: () => import("../views/OptimizeView.vue"),\n    },',
+        '    {\n      path: "/optimize",\n      name: "optimize",\n      component: () => import("../views/OptimizeView.vue"),\n    },\n'
+        '    {\n      path: "/workers",\n      name: "workers",\n      component: () => import("../views/WorkersView.vue"),\n    },',
         marker='path: "/workers"',
     )
+    # Same code-splitting for upstream's own secondary routes: they're all
+    # statically imported today, which bundles every view (plantzones,
+    # resources, settings, workshops, drop-rate calculators, etc.) into the
+    # single main chunk even though a given visit only ever needs one. Home
+    # stays eager (it's the landing page, needs to render immediately) and
+    # About is untouched (upstream already lazy-loads it this same way).
+    LAZY_VIEWS = [
+        "PlantzonesView", "ResourcesView", "SettingsView", "OtherTownsView",
+        "WorkshopsView", "HouseCraft", "DropratesView", "RouterTestsView",
+        "RegionMapView", "FishsizeView", "LodgingView",
+    ]
+    for name in LAZY_VIEWS:
+        edit(
+            router,
+            f'import {name} from "../views/{name}.vue";',
+            f'// {name}: lazy-loaded via route-level code-splitting (see routes below)',
+            marker=f'{name}: lazy-loaded via route-level code-splitting',
+        )
+        edit(
+            router,
+            f'component: {name}',
+            f'component: () => import("../views/{name}.vue")',
+        )
     # Upstream bug: solveForTerminalPairs returns [nodes, cost], but this call
     # site uses the tuple as if it were the node array (and can return it as
     # the solution). It throws whenever the workaround triggers, i.e. when node

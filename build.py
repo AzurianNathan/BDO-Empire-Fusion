@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import shutil
+import time
 import venv
 from pathlib import Path
 
@@ -43,6 +44,23 @@ def sh(cmd, cwd=None, shell=False):
 
 def venv_python(env_dir: Path) -> Path:
     return env_dir / ("Scripts" if IS_WIN else "bin") / ("python.exe" if IS_WIN else "python")
+
+
+def rmtree_retry(path: Path, attempts: int = 6, delay: float = 1.0) -> None:
+    """shutil.rmtree with retries. On Windows, antivirus or the search
+    indexer can transiently lock a directory right after a big npm build
+    just wrote hundreds of files into it, which otherwise fails the whole
+    build with a raw PermissionError for a lock that clears itself in a few
+    seconds."""
+    for attempt in range(attempts):
+        try:
+            shutil.rmtree(path)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(delay)
+            delay *= 1.5
 
 
 def setup_backend():
@@ -94,7 +112,7 @@ def setup_frontend():
     # publish into the server
     static = SERVER / "static"
     if static.exists():
-        shutil.rmtree(static)
+        rmtree_retry(static)
     shutil.copytree(dist, static)
     print(">> frontend built and published to server/static.")
     return True

@@ -32,6 +32,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, field_validator
 
 from bdo_empire.solver_highspy import SolverController
@@ -52,6 +53,11 @@ REGION_MAP = {
 
 app = FastAPI(title="bdo-empire-fused")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# StaticFiles serves everything raw with no compression by default. The map's
+# own JS bundle and several of its data/*.json files (loc.json,
+# all_lodging_storage.json) are multiple MB each and load on every page hit -
+# gzip cuts that by ~70-80% for basically free.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
 # --- data files ---------------------------------------------------------------
