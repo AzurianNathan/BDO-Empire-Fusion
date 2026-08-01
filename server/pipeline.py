@@ -207,6 +207,50 @@ def _split_base_empire(
 _WORKER_PROFILE_FIELDS = ("label", "level", "wspdSheet", "mspdSheet", "luckSheet", "skills")
 
 
+def _label_workers_with_daily_value(workerman_json: dict, data: dict) -> None:
+    """Set each solver-picked plantzone worker's label to their daily silver
+    value at solve time, per shrddr's suggestion (see
+    github.com/Thell/bdo-empire/issues/9): a near-unique identifier, and a
+    built-in staleness check - if the live map's computed profit for that
+    worker later diverges from the number baked into its label,
+    prices/drops have moved enough to warrant a re-solve.
+
+    Mutates workerman_json["userWorkers"] in place. Must run BEFORE
+    _match_available_workers(): a substituted real worker's own label
+    should win over this synthetic one, and _match_available_workers
+    already overwrites "label" for any slot it fills.
+
+    Farming workers are left alone: make_workerman_worker() gives them
+    job="farming" (a string, not a dict), and their value is the flat
+    farming_worker_silver_per_day input, identical for every farm worker in
+    a solve, so it wouldn't be a useful identifier the way a plantzone
+    worker's varying profit is.
+
+    Reads data["plant_values"] the same way generate_workerman_data.py's
+    own generate_workerman_workers()/print_summary() do, and inverts
+    data["affiliated_town_region"] the same way bdo_empire's own
+    generate_graph_data.py does (town_to_region_map, line ~94) - both are
+    bdo_empire's own established internal patterns, not something guessed
+    at from outside.
+    """
+    town_to_region = {town: region for region, town in data.get("affiliated_town_region", {}).items()}
+    plant_values = data.get("plant_values", {})
+    unlabeled = 0
+    for worker in workerman_json.get("userWorkers", []):
+        job = worker.get("job")
+        if not (isinstance(job, dict) and job.get("kind") == "plantzone"):
+            continue
+        region = town_to_region.get(worker.get("tnk"))
+        value = plant_values.get(job.get("pzk"), {}).get(region) if region is not None else None
+        if value is None or "value" not in value:
+            unlabeled += 1
+            continue
+        worker["label"] = str(round(value["value"]))
+    if unlabeled:
+        print(f"WARNING: could not compute a daily-value label for {unlabeled} solved worker(s); "
+              f"left as the upstream default label.")
+
+
 def _match_available_workers(
     solved_workers: list[dict],
     available_workers: list[dict],
@@ -286,6 +330,7 @@ def run_optimization(
 
     highs_results = optimize_highspy(data, controller)
     workerman_json = generate_workerman_data(highs_results, lodging_specs, data)
+    _label_workers_with_daily_value(workerman_json, data)
 
     if match_available_workers and carry_forward:
         idle = [w for w in carry_forward if w.get("job") is None]
